@@ -39,7 +39,7 @@ end
 ```bash
 cd /home/developer/workspace/aomori
 cargo test
-cargo run -- --listen 127.0.0.1:8090
+cargo run -- --listen 127.0.0.1:8091
 ```
 
 测试会验证：

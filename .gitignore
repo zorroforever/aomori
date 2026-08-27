@@ -1,6 +1,12 @@
 # Rust build output
 /target/
 
+# Web dependencies, build output, and test artifacts
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+
 # Local environment and secrets
 .env
 .env.*
@@ -10,6 +16,7 @@
 *.log
 *.pid
 /data/
+/demo-data/
 
 # Editor and IDE files
 .idea/
