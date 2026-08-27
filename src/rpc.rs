@@ -3,47 +3,113 @@ use crate::runtime;
 use crate::storage::SnapshotStore;
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, State, WebSocketUpgrade},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, State, WebSocketUpgrade},
+    http::{header, request::Parts, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::Infallible;
 use std::fmt::Write as _;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+const MAX_RATE_LIMIT_BUCKETS: usize = 10_000;
+const RATE_LIMIT_BUCKET_TTL: Duration = Duration::from_secs(10 * 60);
+const RATE_LIMIT_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
+
+struct TokenBucket {
+    tokens: f64,
+    last_refill: Instant,
+    last_seen: Instant,
+}
+
 pub struct RateLimiter {
-    max_requests: u64,
-    window_started: Instant,
-    requests: u64,
+    requests_per_second: u64,
+    buckets: HashMap<Option<IpAddr>, TokenBucket>,
+    last_pruned: Instant,
 }
 
 impl RateLimiter {
-    pub fn new(max_requests: u64) -> Self {
+    pub fn new(requests_per_second: u64) -> Self {
+        assert!(
+            requests_per_second > 0,
+            "rate limit must be greater than zero"
+        );
+        let now = Instant::now();
+        let mut buckets = HashMap::new();
+        buckets.insert(
+            None,
+            TokenBucket {
+                tokens: requests_per_second as f64,
+                last_refill: now,
+                last_seen: now,
+            },
+        );
         Self {
-            max_requests,
-            window_started: Instant::now(),
-            requests: 0,
+            requests_per_second,
+            buckets,
+            last_pruned: now,
         }
     }
 
-    fn check(&mut self) -> Result<(), u64> {
-        let elapsed = self.window_started.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            self.window_started = Instant::now();
-            self.requests = 0;
+    fn check(&mut self, client_ip: Option<IpAddr>) -> Result<(), u64> {
+        let now = Instant::now();
+        if now.duration_since(self.last_pruned) >= RATE_LIMIT_PRUNE_INTERVAL {
+            self.buckets.retain(|key, bucket| {
+                key.is_none() || now.duration_since(bucket.last_seen) < RATE_LIMIT_BUCKET_TTL
+            });
+            self.last_pruned = now;
         }
-        if self.requests >= self.max_requests {
-            return Err(1000_u64.saturating_sub(elapsed.as_millis() as u64));
+
+        let key = if self.buckets.contains_key(&client_ip)
+            || self.buckets.len() < MAX_RATE_LIMIT_BUCKETS
+        {
+            client_ip
+        } else {
+            None
+        };
+        let capacity = self.requests_per_second as f64;
+        let bucket = self.buckets.entry(key).or_insert(TokenBucket {
+            tokens: capacity,
+            last_refill: now,
+            last_seen: now,
+        });
+        let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * capacity).min(capacity);
+        bucket.last_refill = now;
+        bucket.last_seen = now;
+
+        if bucket.tokens < 1.0 {
+            let retry_after_ms = ((1.0 - bucket.tokens) / capacity * 1000.0).ceil() as u64;
+            return Err(retry_after_ms.max(1));
         }
-        self.requests += 1;
+        bucket.tokens -= 1.0;
         Ok(())
+    }
+}
+
+struct PeerIp(Option<IpAddr>);
+
+impl<S> FromRequestParts<S> for PeerIp
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|peer| peer.0.ip()),
+        ))
     }
 }
 
@@ -55,6 +121,7 @@ pub struct AppState {
     pub admin_token: Option<String>,
     pub allow_unsigned_commands: bool,
     pub cors_origins: Vec<String>,
+    pub trusted_proxies: HashSet<IpAddr>,
     pub rate_limiter: RateLimiter,
     pub observability: Observability,
 }
@@ -453,14 +520,23 @@ fn event_stream_payload(
     }
 }
 
-async fn handle(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
+async fn handle(
+    State(state): State<SharedState>,
+    PeerIp(peer_ip): PeerIp,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let started = Instant::now();
+    let client_ip = {
+        let state = state.lock().unwrap();
+        resolve_client_ip(peer_ip, &headers, &state.trusted_proxies)
+    };
     let request_id = {
         let mut state = state.lock().unwrap();
         state.observability.next_request_id += 1;
         state.observability.next_request_id
     };
-    let (mut response, method, error_code) = process_rpc(&state, &headers, &body);
+    let (mut response, method, error_code) = process_rpc(&state, &headers, &body, client_ip);
     let duration_micros = started.elapsed().as_micros();
     let status = response.status();
     response.headers_mut().insert(
@@ -482,12 +558,40 @@ async fn handle(State(state): State<SharedState>, headers: HeaderMap, body: Byte
     response
 }
 
+fn resolve_client_ip(
+    peer_ip: Option<IpAddr>,
+    headers: &HeaderMap,
+    trusted_proxies: &HashSet<IpAddr>,
+) -> Option<IpAddr> {
+    let mut client_ip = peer_ip?;
+    if !trusted_proxies.contains(&client_ip) {
+        return Some(client_ip);
+    }
+    let Some(forwarded) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Some(client_ip);
+    };
+    for value in forwarded.rsplit(',') {
+        let Ok(forwarded_ip) = value.trim().parse::<IpAddr>() else {
+            return Some(client_ip);
+        };
+        client_ip = forwarded_ip;
+        if !trusted_proxies.contains(&client_ip) {
+            break;
+        }
+    }
+    Some(client_ip)
+}
+
 fn process_rpc(
     state: &SharedState,
     headers: &HeaderMap,
     body: &[u8],
+    client_ip: Option<IpAddr>,
 ) -> (Response, String, Option<i64>) {
-    let rate_limit = state.lock().unwrap().rate_limiter.check();
+    let rate_limit = state.lock().unwrap().rate_limiter.check(client_ip);
     if let Err(retry_after_ms) = rate_limit {
         return (
             (

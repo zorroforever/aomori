@@ -8,13 +8,15 @@
 
 ## HTTP Policy
 
-`/rpc` uses a fixed one-second node-wide rate limit. The default is 100 requests per second and can be changed with `AOMORI_RPC_RATE_LIMIT` or `--rpc-rate-limit`. An exceeded window returns HTTP 429:
+`/rpc` uses a token bucket per client IP. The default refill rate is 100 requests per second with a burst capacity of 100, configurable with `AOMORI_RPC_RATE_LIMIT` or `--rpc-rate-limit`. Buckets that have been idle for ten minutes are removed, and the node bounds the number of tracked client buckets. An exhausted bucket returns HTTP 429:
 
 ```json
-{"jsonrpc":"2.0","id":null,"error":{"code":-32004,"message":"rate limit exceeded","data":{"retry_after_ms":731}}}
+{"jsonrpc":"2.0","id":null,"error":{"code":-32004,"message":"rate limit exceeded","data":{"retry_after_ms":8}}}
 ```
 
-The response also includes `Retry-After: 1` and `Cache-Control: no-store`; CORS exposes `Retry-After` to browser clients. `data.retry_after_ms` is the more precise delay for the current fixed window.
+The response also includes `Retry-After: 1` and `Cache-Control: no-store`; CORS exposes `Retry-After` to browser clients. `data.retry_after_ms` is the more precise delay until the client's bucket receives its next token.
+
+By default the client identity is the TCP peer IP and `X-Forwarded-For` is ignored. Operators behind a reverse proxy may configure comma-separated exact proxy IPs with `AOMORI_TRUSTED_PROXIES` or `--trusted-proxies`. The node then walks the forwarding chain from right to left while addresses are trusted. The proxy must discard any client-supplied `X-Forwarded-For` value before constructing its forwarding chain. CIDR ranges are intentionally not accepted.
 
 `/health` and an established `/events` WebSocket do not consume this quota.
 
@@ -47,7 +49,7 @@ A successful response contains `result`. A failed response contains `error`:
 | `-32000` | Runtime or contract failure |
 | `-32002` | Administrator authorization, owner, signature, or unsigned-write policy failure |
 | `-32003` | Invalid nonce |
-| `-32004` | Node-wide RPC rate limit exceeded; inspect `data.retry_after_ms` |
+| `-32004` | Client RPC token bucket exhausted; inspect `data.retry_after_ms` |
 
 Bodies larger than 1 MiB are rejected before JSON parsing with HTTP `413 Payload Too Large`. JSON-RPC application errors otherwise use HTTP 200, except rate limiting, which uses HTTP 429.
 

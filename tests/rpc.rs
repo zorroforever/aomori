@@ -3,6 +3,7 @@ use aomori::model::{Transaction, WorldState};
 use aomori::rpc::{self, AppState};
 use aomori::storage::SnapshotStore;
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::StreamExt;
@@ -10,6 +11,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::fs;
 use std::future::IntoFuture;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
@@ -34,6 +36,7 @@ fn app_with_options(
         admin_token: admin_token.map(str::to_string),
         allow_unsigned_commands,
         cors_origins: vec!["http://127.0.0.1:5173".into()],
+        trusted_proxies: Default::default(),
         rate_limiter: rpc::RateLimiter::new(10_000),
         observability: rpc::Observability::default(),
     }));
@@ -49,6 +52,13 @@ fn app() -> (axum::Router, TempDir) {
 }
 
 fn app_with_rate_limit(max_requests: u64) -> (axum::Router, TempDir) {
+    app_with_rate_limit_and_trusted_proxies(max_requests, &[])
+}
+
+fn app_with_rate_limit_and_trusted_proxies(
+    max_requests: u64,
+    trusted_proxies: &[IpAddr],
+) -> (axum::Router, TempDir) {
     let (app, dir) = app_with_options(Some("test-admin-token"), true);
     // Rebuild with a low limit through the same initialized world helper is unnecessary here;
     // this router-level test uses a dedicated state below.
@@ -65,10 +75,35 @@ fn app_with_rate_limit(max_requests: u64) -> (axum::Router, TempDir) {
         admin_token: None,
         allow_unsigned_commands: true,
         cors_origins: vec!["http://127.0.0.1:5173".into()],
+        trusted_proxies: trusted_proxies.iter().copied().collect(),
         rate_limiter: rpc::RateLimiter::new(max_requests),
         observability: rpc::Observability::default(),
     }));
     (rpc::router(state), dir)
+}
+
+async fn rpc_from(
+    app: &axum::Router,
+    peer: &str,
+    forwarded_for: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut request = Request::post("/rpc").header("content-type", "application/json");
+    if let Some(forwarded_for) = forwarded_for {
+        request = request.header("x-forwarded-for", forwarded_for);
+    }
+    let mut request = request
+        .body(Body::from(
+            json!({"jsonrpc":"2.0","id":1,"method":"aomori_get_info","params":{}}).to_string(),
+        ))
+        .unwrap();
+    request.extensions_mut().insert(ConnectInfo(
+        peer.parse::<SocketAddr>().expect("valid test peer"),
+    ));
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    (status, body)
 }
 
 async fn raw_body(app: &axum::Router, body: impl Into<Body>) -> (StatusCode, Value) {
@@ -201,11 +236,65 @@ async fn rpc_rate_limit_returns_429_and_recovers_next_window() {
         .as_u64()
         .is_some());
 
-    tokio::time::sleep(Duration::from_millis(1_010)).await;
+    tokio::time::sleep(Duration::from_millis(510)).await;
     assert!(request(&app, "aomori_get_info", json!({}))
         .await
         .get("result")
         .is_some());
+}
+
+#[tokio::test]
+async fn rpc_rate_limit_isolated_by_peer_ip_and_ignores_untrusted_forwarding_headers() {
+    let (app, _dir) = app_with_rate_limit(1);
+    assert_eq!(
+        rpc_from(&app, "192.0.2.1:4000", Some("198.51.100.1"))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        rpc_from(&app, "192.0.2.1:4001", Some("198.51.100.2"))
+            .await
+            .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        rpc_from(&app, "192.0.2.2:4000", None).await.0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn rpc_rate_limit_uses_forwarded_chain_only_from_trusted_proxies() {
+    let trusted = ["10.0.0.1".parse().unwrap(), "10.0.0.2".parse().unwrap()];
+    let (app, _dir) = app_with_rate_limit_and_trusted_proxies(1, &trusted);
+
+    assert_eq!(
+        rpc_from(&app, "10.0.0.1:4000", Some("198.51.100.1, 10.0.0.2"))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        rpc_from(&app, "10.0.0.1:4001", Some("198.51.100.1, 10.0.0.2"))
+            .await
+            .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        rpc_from(&app, "10.0.0.1:4002", Some("198.51.100.2, 10.0.0.2"))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        rpc_from(&app, "10.0.0.1:4003", None).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        rpc_from(&app, "10.0.0.1:4004", None).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 #[tokio::test]

@@ -19,6 +19,8 @@ docker compose logs -f aomori
 
 Compose 默认只把节点发布到宿主机 `127.0.0.1:8091`。推荐由同机反向代理终止 TLS，再代理 `/rpc`、`/events`、`/health` 和 `/ready`。只有在防火墙规则已经明确限制来源时，才把 `AOMORI_PUBLISH_ADDRESS` 设置为 `0.0.0.0`。
 
+RPC token bucket 默认直接使用 TCP 对端 IP，且忽略 `X-Forwarded-For`。如果反向代理与节点之间不是一对一的 loopback 连接，应将节点实际看到的代理 IP 以逗号分隔写入 `AOMORI_TRUSTED_PROXIES`；只接受精确 IP，不接受 CIDR。配置后节点会从右向左剥离受信代理地址。反向代理必须先删除客户端传入的 `X-Forwarded-For`，再用连接来源构造新链，否则攻击者可能伪造限流身份。不要把 `0.0.0.0`、任意客户端网段或不受控制的上游代理加入信任列表；信任同机 loopback 代理时，也必须确保节点端口不能被其他本地进程或容器直接访问。
+
 镜像以 UID/GID `10001` 非 root 用户运行，根文件系统只读，唯一持久写路径为 `/data`。默认使用 Docker named volume `aomori-data`。如果改用宿主机 bind mount，需先将目录所有者设为 `10001:10001`，并确认临时文件、主快照和备份处于同一本地文件系统。
 
 ## 探针和监控

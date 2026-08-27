@@ -1,7 +1,7 @@
 use anyhow::Result;
 use axum::Router;
 use clap::Parser;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -30,6 +30,12 @@ struct Args {
     cors_origins: Vec<String>,
     #[arg(long, env = "AOMORI_RPC_RATE_LIMIT", default_value_t = 100)]
     rpc_rate_limit: u64,
+    #[arg(
+        long = "trusted-proxies",
+        env = "AOMORI_TRUSTED_PROXIES",
+        default_value = ""
+    )]
+    trusted_proxies: String,
 }
 
 #[tokio::main]
@@ -44,6 +50,17 @@ async fn main() -> Result<()> {
     if args.rpc_rate_limit == 0 {
         anyhow::bail!("RPC rate limit must be greater than zero");
     }
+    let trusted_proxies = args
+        .trusted_proxies
+        .split(',')
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            value
+                .trim()
+                .parse::<IpAddr>()
+                .map_err(|_| anyhow::anyhow!("invalid trusted proxy IP: {value}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     for origin in &args.cors_origins {
         let uri: axum::http::Uri = origin
             .parse()
@@ -83,6 +100,7 @@ async fn main() -> Result<()> {
         admin_token: args.admin_token,
         allow_unsigned_commands: args.allow_unsigned_commands,
         cors_origins: args.cors_origins.clone(),
+        trusted_proxies: trusted_proxies.iter().copied().collect(),
         rate_limiter: aomori::rpc::RateLimiter::new(args.rpc_rate_limit),
         observability: aomori::rpc::Observability::default(),
     }));
@@ -95,12 +113,16 @@ async fn main() -> Result<()> {
             "listen":args.listen.to_string(),
             "lua_instruction_limit":args.lua_instruction_limit,
             "lua_memory_limit":args.lua_memory_limit,
-            "rpc_rate_limit_per_second":args.rpc_rate_limit
+            "rpc_rate_limit_per_second":args.rpc_rate_limit,
+            "trusted_proxy_count":trusted_proxies.len()
         })
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

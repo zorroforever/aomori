@@ -14,7 +14,7 @@ Aomori 是一个以 Rust 实现的单点自治世界 MVP。脚本使用 Lua，�
 - `state.json.bak` 仅从验证有效的主快照更新，并支持同步恢复
 - HTTP JSON-RPC API（1 MiB 请求体上限，非法 JSON 返回标准 `-32700`）
 - CORS 默认仅允许本机 Vite Origin，可通过 `AOMORI_CORS_ORIGINS` 配置局域网页面
-- `/rpc` 默认限制每秒 100 个请求；Web 只对幂等读请求自动退避重试一次，写请求不自动重放
+- `/rpc` 默认按客户端 IP 使用每秒补充 100 个 token、容量 100 的 token bucket；Web 只对幂等读请求自动退避重试一次，写请求不自动重放
 - 管理 RPC 使用 `Authorization: Bearer` 认证；未配置 `AOMORI_ADMIN_TOKEN` 时默认禁用
 - Web 客户端可生成 Ed25519 身份，本地仅持久化密码加密密钥仓；刷新后需显式解锁，明文私钥只保留在当前页面内存，并支持导出/导入加密备份
 - 签名交易遇到并发 nonce 冲突时自动刷新 nonce、重新签名并重试一次
