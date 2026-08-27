@@ -8,6 +8,8 @@ type WorldEvent = { id: number; head: number; kind: string; entity_id?: number; 
 type EventStreamLagged = { type: 'event_stream_lagged'; missed: number; last_event_id: number };
 type IdentityBackup = { format: 'aomori-ed25519-backup'; version: 1; account: string; publicKey: string; salt: string; nonce: string; ciphertext: string; iterations: number };
 
+const IDENTITY_ITERATIONS = 210_000;
+
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
 const state = { rpc: defaultRpc, actor: 4, account: '', secretKey: null as Uint8Array | null, lastEvent: 0, seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, roomActors: [] as any[], quests: [] as any[] };
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -20,7 +22,7 @@ app.innerHTML = `
   <main class="layout">
     <aside class="sidebar">
       <section class="section"><div class="section-title">WORLD NODE</div><label>RPC 地址<input id="rpcInput" value="${state.rpc}" /></label><label>Actor ID<input id="actorInput" type="number" value="${state.actor}" min="1" /></label></section>
-      <section class="section"><div class="section-title">签名身份</div><label>新账户名<input id="accountInput" placeholder="player-name" /></label><label>管理员 Token<input id="adminTokenInput" type="password" autocomplete="off" placeholder="仅创建身份时使用" /></label><button id="createIdentityBtn" class="button identity-button">创建签名身份</button><div class="stat"><span>写入模式</span><strong id="writeMode">开发 command</strong></div><div class="identity-actions"><button id="exportIdentityBtn" class="text-button" hidden>导出加密备份</button><button id="importIdentityBtn" class="text-button">导入加密备份</button><input id="importIdentityFile" type="file" accept="application/json,.json" hidden /></div><button id="forgetIdentityBtn" class="text-button" hidden>清除此账户私钥</button></section>
+      <section class="section"><div class="section-title">签名身份</div><label>新账户名<input id="accountInput" placeholder="player-name" /></label><label>管理员 Token<input id="adminTokenInput" type="password" autocomplete="off" placeholder="仅创建身份时使用" /></label><button id="createIdentityBtn" class="button identity-button">创建签名身份</button><div class="stat"><span>写入模式</span><strong id="writeMode">开发 command</strong></div><div class="identity-actions"><button id="unlockIdentityBtn" class="text-button" hidden>解锁本地身份</button><button id="lockIdentityBtn" class="text-button" hidden>锁定当前会话</button><button id="exportIdentityBtn" class="text-button" hidden>导出加密备份</button><button id="importIdentityBtn" class="text-button">导入加密备份</button><input id="importIdentityFile" type="file" accept="application/json,.json" hidden /></div><button id="forgetIdentityBtn" class="text-button" hidden>删除本地身份</button></section>
       <section class="section"><div class="section-title">当前角色</div><div class="identity"><div class="avatar">03</div><div><strong id="actorLabel">Actor #4</strong><span>explorer</span></div></div><div class="stat"><span>位置</span><strong id="location">未知</strong></div><div class="stat"><span>世界高度</span><strong id="head">-</strong></div></section>
       <section class="section"><div class="section-title">出口</div><div id="exits" class="exits"><span class="muted">执行 look 查看</span></div></section><section class="section"><div class="section-title">当前位置</div><div id="roomEntities" class="room-entities"><span class="muted">执行 look 查看</span></div></section><section class="section"><div class="section-title">背包</div><div id="inventory" class="inventory"><span class="muted">暂无物品</span></div></section><section class="section"><div class="section-title">任务</div><div id="questList" class="quest-list"><span class="muted">暂无任务</span></div><div class="stat"><span>余额</span><strong id="balance">0</strong></div></section>
     </aside>
@@ -33,22 +35,63 @@ const log = $('log');
 function addLog(text: string, type = '') { const row = document.createElement('div'); row.className = `log-row ${type}`; row.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><span>${escapeHtml(text)}</span>`; log.append(row); log.scrollTop = log.scrollHeight; }
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]!)); }
 function setStatus(online: boolean, text: string) { $('statusDot').className = `dot ${online ? 'online' : 'offline'}`; $('statusText').textContent = text; }
-function selectRpc(rpcUrl: string) { const next = rpcUrl.replace(/\/$/, ''); if (next !== state.rpc) { window.clearTimeout(state.reconnectTimer); if (state.socket) { state.socket.onclose = null; state.socket.close(); state.socket = null; } state.lastEvent = 0; state.seenEvents.clear(); state.recoveringEvents = null; $('eventCount').textContent = '0'; $('eventList').innerHTML = '<span class="muted">等待事件...</span>'; } state.rpc = next; }
+function selectRpc(rpcUrl: string) { const next = rpcUrl.replace(/\/$/, ''); if (next !== state.rpc) { window.clearTimeout(state.reconnectTimer); if (state.socket) { state.socket.onclose = null; state.socket.close(); state.socket = null; } clearSecretKey(); state.account = ''; state.lastEvent = 0; state.seenEvents.clear(); state.recoveringEvents = null; $('eventCount').textContent = '0'; $('eventList').innerHTML = '<span class="muted">等待事件...</span>'; } state.rpc = next; }
 function bytesToHex(bytes: Uint8Array) { return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''); }
 function hexToBytes(hex: string) { if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2) throw new Error('无效的本地私钥'); return new Uint8Array(hex.match(/.{2}/g)!.map(byte => Number.parseInt(byte, 16))); }
 function keyStorageName(account: string) { return `aomori:ed25519:${state.rpc}:${account}`; }
-function loadIdentity(account: string) { const encoded = localStorage.getItem(keyStorageName(account)); state.account = account; state.secretKey = encoded ? hexToBytes(encoded) : null; $('writeMode').textContent = state.secretKey ? `签名交易 · ${account}` : '开发 command'; $('forgetIdentityBtn').hidden = !state.secretKey; $('exportIdentityBtn').hidden = !state.secretKey; }
+function setIdentityUi(stored: boolean) {
+  const unlocked = Boolean(state.secretKey && state.account);
+  $('writeMode').textContent = unlocked ? `签名交易 · ${state.account}` : stored ? `身份已锁定 · ${state.account}` : '开发 command';
+  $('unlockIdentityBtn').hidden = !stored || unlocked;
+  $('lockIdentityBtn').hidden = !unlocked;
+  $('forgetIdentityBtn').hidden = !stored;
+  $('exportIdentityBtn').hidden = !unlocked;
+}
+function clearSecretKey() { state.secretKey?.fill(0); state.secretKey = null; }
+function lockIdentity(message?: string) { clearSecretKey(); setIdentityUi(Boolean(state.account && localStorage.getItem(keyStorageName(state.account)))); if (message) addLog(message, 'system'); }
+function loadIdentity(account: string) { clearSecretKey(); state.account = account; setIdentityUi(Boolean(account && localStorage.getItem(keyStorageName(account)))); }
 function deriveBackupKey(password: string, salt: Uint8Array, iterations: number) { return pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: iterations, dkLen: nacl.secretbox.keyLength }); }
-function password(promptText: string) { const value = window.prompt(promptText); if (!value || value.length < 8) throw new Error('备份密码至少需要 8 个字符'); return value; }
+function password(promptText: string) { const value = window.prompt(promptText); if (!value || value.length < 8) throw new Error('身份密码至少需要 8 个字符'); return value; }
+function encryptedIdentity(account: string, secretKey: Uint8Array, identityPassword: string): IdentityBackup {
+  const salt = nacl.randomBytes(16);
+  const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+  return { format: 'aomori-ed25519-backup', version: 1, account, publicKey: bytesToHex(secretKey.slice(32)), salt: bytesToHex(salt), nonce: bytesToHex(nonce), ciphertext: bytesToHex(nacl.secretbox(secretKey, nonce, deriveBackupKey(identityPassword, salt, IDENTITY_ITERATIONS))), iterations: IDENTITY_ITERATIONS };
+}
+function validateBackup(backup: IdentityBackup) { if (backup.format !== 'aomori-ed25519-backup' || backup.version !== 1 || !backup.account || backup.iterations < 100_000) throw new Error('不支持的身份备份格式'); }
+function decryptIdentity(backup: IdentityBackup, identityPassword: string) {
+  validateBackup(backup);
+  const secretKey = nacl.secretbox.open(hexToBytes(backup.ciphertext), hexToBytes(backup.nonce), deriveBackupKey(identityPassword, hexToBytes(backup.salt), backup.iterations));
+  if (!secretKey || secretKey.length !== nacl.sign.secretKeyLength) throw new Error('身份密码错误或密钥数据已损坏');
+  const keys = nacl.sign.keyPair.fromSecretKey(secretKey);
+  if (bytesToHex(keys.publicKey) !== backup.publicKey.toLowerCase()) throw new Error('身份公钥校验失败');
+  return secretKey;
+}
+async function unlockIdentity() {
+  if (!state.account) throw new Error('当前角色没有账户身份');
+  const storageName = keyStorageName(state.account);
+  const stored = localStorage.getItem(storageName);
+  if (!stored) throw new Error('当前账户没有本地身份');
+  let secretKey: Uint8Array;
+  if (/^[0-9a-f]{128}$/i.test(stored)) {
+    secretKey = hexToBytes(stored);
+    const migrationPassword = password('检测到旧版明文私钥，请设置本地身份密码（至少 8 个字符）');
+    localStorage.setItem(storageName, JSON.stringify(encryptedIdentity(state.account, secretKey, migrationPassword)));
+    addLog('旧版明文私钥已迁移为加密存储', 'system');
+  } else {
+    const backup = JSON.parse(stored) as IdentityBackup;
+    if (backup.account !== state.account) throw new Error('本地身份账户不匹配');
+    secretKey = decryptIdentity(backup, password('输入本地身份密码'));
+  }
+  const account = await rpc('aomori_get_account', { name: state.account });
+  if (!account || account.public_key?.toLowerCase() !== bytesToHex(secretKey.slice(32))) throw new Error('节点账户与本地身份公钥不匹配');
+  state.secretKey = secretKey;
+  setIdentityUi(true);
+  addLog(`已解锁 ${state.account}，私钥仅保留在当前页面内存`, 'system');
+}
 function exportIdentity() {
   if (!state.secretKey || !state.account) throw new Error('当前没有可导出的签名身份');
   const backupPassword = password('输入备份密码（至少 8 个字符）');
-  const salt = nacl.randomBytes(16);
-  const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
-  const iterations = 210_000;
-  const key = deriveBackupKey(backupPassword, salt, iterations);
-  const publicKey = state.secretKey.slice(32);
-  const backup: IdentityBackup = { format: 'aomori-ed25519-backup', version: 1, account: state.account, publicKey: bytesToHex(publicKey), salt: bytesToHex(salt), nonce: bytesToHex(nonce), ciphertext: bytesToHex(nacl.secretbox(state.secretKey, nonce, key)), iterations };
+  const backup = encryptedIdentity(state.account, state.secretKey, backupPassword);
   const link = document.createElement('a');
   link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
   link.download = `aomori-${state.account}-identity.json`;
@@ -58,18 +101,16 @@ function exportIdentity() {
 }
 async function importIdentity(file: File) {
   const backup = JSON.parse(await file.text()) as IdentityBackup;
-  if (backup.format !== 'aomori-ed25519-backup' || backup.version !== 1 || !backup.account || backup.iterations < 100_000) throw new Error('不支持的身份备份格式');
-  const backupPassword = password('输入身份备份密码');
-  const key = deriveBackupKey(backupPassword, hexToBytes(backup.salt), backup.iterations);
-  const secretKey = nacl.secretbox.open(hexToBytes(backup.ciphertext), hexToBytes(backup.nonce), key);
-  if (!secretKey || secretKey.length !== nacl.sign.secretKeyLength) throw new Error('备份密码错误或文件已损坏');
-  const keys = nacl.sign.keyPair.fromSecretKey(secretKey);
-  if (bytesToHex(keys.publicKey) !== backup.publicKey.toLowerCase()) throw new Error('备份公钥校验失败');
+  validateBackup(backup);
+  const secretKey = decryptIdentity(backup, password('输入身份备份密码'));
   selectRpc(($('rpcInput') as HTMLInputElement).value);
   const account = await rpc('aomori_get_account', { name: backup.account });
   if (!account || account.public_key?.toLowerCase() !== backup.publicKey.toLowerCase()) throw new Error('节点账户与备份公钥不匹配');
-  localStorage.setItem(keyStorageName(backup.account), bytesToHex(secretKey));
-  loadIdentity(backup.account);
+  localStorage.setItem(keyStorageName(backup.account), JSON.stringify(backup));
+  clearSecretKey();
+  state.account = backup.account;
+  state.secretKey = secretKey;
+  setIdentityUi(true);
   addLog(`已导入 ${backup.account} 的签名身份`, 'system');
 }
 function transactionBytes(tx: any) { return new TextEncoder().encode(JSON.stringify({ from: tx.from, nonce: tx.nonce, entity_id: tx.entity_id, action: tx.action, args: tx.args, signature: null })); }
@@ -109,7 +150,10 @@ async function refreshInventory() { const result = await rpc('aomori_query', { e
 async function look() { const result = await rpc('aomori_query', { entity_id: state.actor, action: 'look', args: {} }); updateReceipt(result); $('location').textContent = String(result.result.location); $('zoneName').textContent = result.result.name || `Zone #${result.result.location}`; result.messages?.forEach((message: string) => addLog(message)); const entity = await rpc('aomori_get_entity', { entity_id: result.result.location }); const exits = entity?.data?.exits || {}; $('exits').innerHTML = Object.keys(exits).map(direction => `<button class="exit" data-direction="${escapeHtml(direction)}">${escapeHtml(direction)} <span>→</span></button>`).join('') || '<span class="muted">没有出口</span>'; await renderRoomEntities(result.result.location); await refreshInventory(); $('head').textContent = String((await rpc('aomori_get_info', {})).head); }
 async function refreshStatus() { const result = await rpc('aomori_get_quests', { actor_id: state.actor }); const quests = result.quests || []; state.quests = quests; $('questList').innerHTML = quests.length ? quests.map((quest: any) => `<div class="quest-item"><div class="quest-head"><strong>${escapeHtml(quest.title)}</strong><span class="quest-status ${escapeHtml(quest.status)}">${escapeHtml(quest.status)}</span></div><dl><div><dt>目标</dt><dd>${escapeHtml(quest.required_item)}</dd></div><div><dt>交付</dt><dd>${escapeHtml(quest.completion_zone)}</dd></div><div><dt>奖励</dt><dd>${quest.reward_balance} coins</dd></div>${quest.prerequisite_quest_ids?.length ? `<div><dt>前置</dt><dd>${quest.prerequisite_quest_ids.map((id: string) => escapeHtml(id)).join(', ')}</dd></div>` : ''}</dl>${quest.status === 'accepted' ? `<button class="task-button" data-command="complete ${escapeHtml(quest.id)}">完成任务</button>` : ''}</div>`).join('') : '<span class="muted">暂无任务</span>';const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const account = actor?.owner ? await rpc('aomori_get_account', { name: actor.owner }) : null; $('balance').textContent = String(account?.balance || 0); }
 async function submitCommand(action: string, args: Record<string, unknown>) {
-  if (!state.secretKey || !state.account) return rpc('aomori_command', { entity_id: state.actor, action, args });
+  if (!state.secretKey || !state.account) {
+    if (state.account && localStorage.getItem(keyStorageName(state.account))) throw new Error('签名身份已锁定，请先解锁本地身份');
+    return rpc('aomori_command', { entity_id: state.actor, action, args });
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const account = await rpc('aomori_get_account', { name: state.account });
     if (!account) throw new Error(`账户不存在: ${state.account}`);
@@ -151,29 +195,35 @@ async function command(raw: string) {
   await refreshInventory();
   if (action === 'go' || action === 'accept' || action === 'complete') await look();
 }
-async function connect() { selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); loadIdentity(actor?.owner || ''); setStatus(true, '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshEvents(); await refreshStatus(); await look(); } catch (error) { setStatus(false, '连接失败'); addLog((error as Error).message, 'error'); } }
+async function connect() { selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const owner = actor?.owner || ''; if (!state.secretKey || state.account !== owner) loadIdentity(owner); setStatus(true, '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshEvents(); await refreshStatus(); await look(); } catch (error) { setStatus(false, '连接失败'); addLog((error as Error).message, 'error'); } }
 async function createIdentity() {
   selectRpc(($('rpcInput') as HTMLInputElement).value);
   const account = ($('accountInput') as HTMLInputElement).value.trim();
   const adminToken = ($('adminTokenInput') as HTMLInputElement).value;
   if (!account || !adminToken) throw new Error('账户名和管理员 Token 必填');
+  const identityPassword = password('设置本地身份密码（至少 8 个字符，刷新页面后需重新解锁）');
   const keys = nacl.sign.keyPair();
   await rpc('aomori_create_account', { name: account, public_key: bytesToHex(keys.publicKey), balance: 0 }, adminToken);
   const created = await rpc('aomori_create_entity', { kind: 'actor', owner: account, contract: 'demo', location: 1, data: { name: account } }, adminToken);
-  localStorage.setItem(keyStorageName(account), bytesToHex(keys.secretKey));
+  localStorage.setItem(keyStorageName(account), JSON.stringify(encryptedIdentity(account, keys.secretKey, identityPassword)));
+  clearSecretKey();
+  state.account = account;
+  state.secretKey = keys.secretKey;
   ($('adminTokenInput') as HTMLInputElement).value = '';
   ($('actorInput') as HTMLInputElement).value = String(created.entity_id);
   state.actor = created.entity_id;
-  loadIdentity(account);
+  setIdentityUi(true);
   addLog(`已创建签名身份 ${account}，Actor #${state.actor}`, 'system');
   await connect();
 }
 $('connectBtn').onclick = connect;
 $('createIdentityBtn').onclick = () => createIdentity().catch(error => addLog(error.message, 'error'));
+$('unlockIdentityBtn').onclick = () => unlockIdentity().catch(error => addLog(error.message, 'error'));
+$('lockIdentityBtn').onclick = () => lockIdentity('签名身份已锁定，内存私钥已清除');
 $('exportIdentityBtn').onclick = () => { try { exportIdentity(); } catch (error) { addLog((error as Error).message, 'error'); } };
 $('importIdentityBtn').onclick = () => ($('importIdentityFile') as HTMLInputElement).click();
 $('importIdentityFile').addEventListener('change', event => { const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (file) importIdentity(file).catch(error => addLog(error.message, 'error')).finally(() => { input.value = ''; }); });
-$('forgetIdentityBtn').onclick = () => { if (state.account) localStorage.removeItem(keyStorageName(state.account)); state.secretKey = null; $('writeMode').textContent = '开发 command'; $('forgetIdentityBtn').hidden = true; $('exportIdentityBtn').hidden = true; addLog('已清除当前账户的本地私钥', 'system'); };
+$('forgetIdentityBtn').onclick = () => { if (state.account) localStorage.removeItem(keyStorageName(state.account)); clearSecretKey(); setIdentityUi(false); addLog('已删除当前账户的本地加密身份', 'system'); };
 $('lookBtn').onclick = () => look().catch(error => addLog(error.message, 'error')); const commandInput = $('commandInput') as HTMLInputElement; commandInput.addEventListener('keydown', event => { if (event.key === 'ArrowUp') { event.preventDefault(); state.historyIndex = Math.max(0, state.historyIndex - 1); commandInput.value = state.history[state.historyIndex] || ''; } if (event.key === 'ArrowDown') { event.preventDefault(); state.historyIndex = Math.min(state.history.length, state.historyIndex + 1); commandInput.value = state.history[state.historyIndex] || ''; } }); $('commandForm').addEventListener('submit', event => { event.preventDefault(); const input = $('commandInput') as HTMLInputElement; const value = input.value.trim(); if (!value) return; state.history = [...state.history.filter(item => item !== value), value].slice(-50); state.historyIndex = state.history.length; addLog(`> ${value}`, 'command'); input.value = ''; command(value).catch(error => addLog(error.message, 'error')); }); $('exits').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-direction]'); if (button) command(`go ${button.dataset.direction}`).catch(error => addLog(error.message, 'error')); });
 $('roomEntities').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) command(button.dataset.command || '').catch(error => addLog(error.message, 'error')); });
 $('inventory').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) command(button.dataset.command || '').catch(error => addLog(error.message, 'error')); });

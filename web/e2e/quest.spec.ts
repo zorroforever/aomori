@@ -25,15 +25,22 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   await expect(page.locator('#rpcInput')).toHaveValue('http://127.0.0.1:18093');
   await page.locator('#accountInput').fill('browser-player');
   await page.locator('#adminTokenInput').fill('e2e-admin-token');
+  page.once('dialog', dialog => dialog.accept('local-password'));
   await page.getByRole('button', { name: '创建签名身份' }).click();
   await expect(page.locator('#log')).toContainText('请求过于频繁，请在 25 毫秒后重试');
   expect(limitedWrites).toBe(1);
   await page.unroute('http://127.0.0.1:18093/rpc');
+  page.once('dialog', dialog => dialog.accept('local-password'));
   await page.getByRole('button', { name: '创建签名身份' }).click();
 
   await expect(page.locator('#statusText')).toHaveText('节点在线');
   await expect(page.locator('#writeMode')).toContainText('签名交易');
   await expect(page.locator('#actorInput')).toHaveValue('9');
+
+  const storedIdentity = await page.evaluate(() => Object.entries(localStorage).find(([key]) => key.includes('browser-player'))?.[1]);
+  expect(storedIdentity).toBeTruthy();
+  expect(storedIdentity).not.toMatch(/^[0-9a-f]{128}$/i);
+  expect(JSON.parse(storedIdentity!).format).toBe('aomori-ed25519-backup');
 
   page.once('dialog', dialog => dialog.accept('backup-password'));
   const downloadPromise = page.waitForEvent('download');
@@ -41,10 +48,22 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   const download = await downloadPromise;
   const backupPath = await download.path();
   expect(backupPath).toBeTruthy();
-  await page.getByRole('button', { name: '清除此账户私钥' }).click();
+  await page.getByRole('button', { name: '删除本地身份' }).click();
   await expect(page.locator('#writeMode')).toHaveText('开发 command');
   page.once('dialog', dialog => dialog.accept('backup-password'));
   await page.locator('#importIdentityFile').setInputFiles(backupPath!);
+  await expect(page.locator('#writeMode')).toContainText('签名交易');
+  await page.getByRole('button', { name: '锁定当前会话' }).click();
+  await expect(page.locator('#writeMode')).toContainText('身份已锁定');
+  await page.locator('#exits').getByRole('button', { name: /east/ }).click();
+  await expect(page.locator('#log')).toContainText('签名身份已锁定，请先解锁本地身份');
+  await expect(page.locator('#zoneName')).toHaveText('Village');
+  page.once('dialog', dialog => dialog.accept('wrong-password'));
+  await page.getByRole('button', { name: '解锁本地身份' }).click();
+  await expect(page.locator('#log')).toContainText('身份密码错误或密钥数据已损坏');
+  await expect(page.locator('#writeMode')).toContainText('身份已锁定');
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  await page.getByRole('button', { name: '解锁本地身份' }).click();
   await expect(page.locator('#writeMode')).toContainText('签名交易');
   await expect(page.locator('#zoneName')).toHaveText('Village');
   await expect(page.locator('#questList')).toContainText('The Lost Key');
@@ -97,6 +116,9 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   await page.reload();
   await page.locator('#actorInput').fill('9');
   await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#writeMode')).toContainText('身份已锁定');
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  await page.getByRole('button', { name: '解锁本地身份' }).click();
   await expect(page.locator('#writeMode')).toContainText('签名交易');
   await expect(page.locator('#questList')).toContainText('completed');
   await expect(page.locator('#balance')).toHaveText('20');
