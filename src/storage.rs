@@ -5,7 +5,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const FORMAT_VERSION: u32 = 1;
+const LEGACY_FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
@@ -195,33 +196,27 @@ fn decode(path: &Path) -> Result<WorldState> {
     if value.get("format_version").is_none() {
         let state: WorldState = serde_json::from_value(value)
             .with_context(|| format!("parse legacy snapshot {}", path.display()))?;
-        state
-            .validate_references()
-            .context("validate core references")?;
-        state.validate_events().context("validate event log")?;
-        state
-            .validate_locations()
-            .context("validate entity locations")?;
-        if !legacy_quest_schema {
-            state
-                .validate_quests()
-                .context("validate quest definitions")?;
-        }
-        if !legacy_inventory_schema {
-            state
-                .validate_inventories()
-                .context("validate inventories")?;
-        }
+        validate_legacy_state(&state, legacy_quest_schema, legacy_inventory_schema)?;
         return Ok(state);
     }
-    let snapshot: Snapshot = serde_json::from_value(value)
-        .with_context(|| format!("parse versioned snapshot {}", path.display()))?;
-    if snapshot.format_version != FORMAT_VERSION {
+
+    let format_version = value
+        .get("format_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok())
+        .filter(|version| *version > 0)
+        .ok_or_else(|| anyhow!("snapshot format_version must be a positive integer"))?;
+    if !matches!(format_version, LEGACY_FORMAT_VERSION | FORMAT_VERSION) {
         return Err(anyhow!(
-            "unsupported snapshot format version: {}",
-            snapshot.format_version
+            "unsupported snapshot format version: {format_version}"
         ));
     }
+    if format_version == FORMAT_VERSION {
+        validate_current_schema(&value)?;
+    }
+
+    let snapshot: Snapshot = serde_json::from_value(value)
+        .with_context(|| format!("parse versioned snapshot {}", path.display()))?;
     let actual_root = snapshot.state.root();
     if snapshot.state_root != actual_root {
         return Err(anyhow!(
@@ -230,31 +225,191 @@ fn decode(path: &Path) -> Result<WorldState> {
             actual_root
         ));
     }
-    snapshot
-        .state
+
+    if snapshot.format_version == LEGACY_FORMAT_VERSION {
+        validate_legacy_state(
+            &snapshot.state,
+            legacy_quest_schema,
+            legacy_inventory_schema,
+        )?;
+    } else {
+        snapshot
+            .state
+            .validate()
+            .context("validate current snapshot state")?;
+    }
+    Ok(snapshot.state)
+}
+
+fn validate_legacy_state(
+    state: &WorldState,
+    legacy_quest_schema: bool,
+    legacy_inventory_schema: bool,
+) -> Result<()> {
+    state
         .validate_references()
         .context("validate core references")?;
-    snapshot
-        .state
-        .validate_events()
-        .context("validate event log")?;
-    snapshot
-        .state
+    state.validate_events().context("validate event log")?;
+    state
         .validate_locations()
         .context("validate entity locations")?;
     if !legacy_quest_schema {
-        snapshot
-            .state
+        state
             .validate_quests()
             .context("validate quest definitions")?;
     }
     if !legacy_inventory_schema {
-        snapshot
-            .state
+        state
             .validate_inventories()
             .context("validate inventories")?;
     }
-    Ok(snapshot.state)
+    Ok(())
+}
+
+fn validate_current_schema(value: &serde_json::Value) -> Result<()> {
+    let envelope = value
+        .as_object()
+        .ok_or_else(|| anyhow!("snapshot must be an object"))?;
+    require_object_fields(
+        envelope,
+        "envelope",
+        &["format_version", "state_root", "state"],
+    )?;
+    let state = envelope
+        .get("state")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow!("snapshot state must be an object"))?;
+    require_object_fields(
+        state,
+        "state",
+        &[
+            "accounts",
+            "entities",
+            "contracts",
+            "receipts",
+            "quests",
+            "quest_progress",
+            "inventories",
+            "events",
+            "next_event_id",
+            "next_entity_id",
+            "head",
+        ],
+    )?;
+
+    if actors_contain_legacy_inventory(value) {
+        return Err(anyhow!(
+            "snapshot format version {FORMAT_VERSION} contains legacy actor inventory data"
+        ));
+    }
+    require_map_entry_fields(
+        state.get("accounts"),
+        "account",
+        &["name", "public_key", "nonce", "balance"],
+    )?;
+    require_map_entry_fields(
+        state.get("entities"),
+        "entity",
+        &["id", "kind", "owner", "location", "contract", "data"],
+    )?;
+    require_map_entry_fields(
+        state.get("contracts"),
+        "contract",
+        &["name", "version", "source", "source_hash", "status"],
+    )?;
+    require_map_entry_fields(
+        state.get("receipts"),
+        "receipt",
+        &[
+            "tx_id",
+            "from",
+            "nonce",
+            "ok",
+            "messages",
+            "result",
+            "state_root",
+        ],
+    )?;
+    require_map_entry_fields(
+        state.get("quests"),
+        "quest",
+        &[
+            "id",
+            "title",
+            "giver_entity_id",
+            "prerequisite_quest_ids",
+            "required_item",
+            "completion_zone",
+            "reward_balance",
+            "consume_required_item",
+        ],
+    )?;
+    require_map_entry_fields(
+        state.get("quest_progress"),
+        "quest progress",
+        &["quest_id", "actor_id", "status"],
+    )?;
+    require_array_entry_fields(
+        state.get("events"),
+        "event",
+        &["id", "head", "kind", "entity_id", "data"],
+    )
+}
+
+fn require_object_fields(
+    object: &serde_json::Map<String, serde_json::Value>,
+    label: &str,
+    fields: &[&str],
+) -> Result<()> {
+    for field in fields {
+        if !object.contains_key(*field) {
+            return Err(anyhow!(
+                "snapshot format version {FORMAT_VERSION} {label} is missing field: {field}"
+            ));
+        }
+    }
+    for field in object.keys() {
+        if !fields.contains(&field.as_str()) {
+            return Err(anyhow!(
+                "snapshot format version {FORMAT_VERSION} {label} contains unknown field: {field}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn require_map_entry_fields(
+    entries: Option<&serde_json::Value>,
+    label: &str,
+    fields: &[&str],
+) -> Result<()> {
+    let entries = entries
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow!("snapshot {label}s must be an object"))?;
+    for (key, entry) in entries {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| anyhow!("snapshot {label} {key} must be an object"))?;
+        require_object_fields(entry, &format!("{label} {key}"), fields)?;
+    }
+    Ok(())
+}
+
+fn require_array_entry_fields(
+    entries: Option<&serde_json::Value>,
+    label: &str,
+    fields: &[&str],
+) -> Result<()> {
+    let entries = entries
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("snapshot {label}s must be an array"))?;
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| anyhow!("snapshot {label} {index} must be an object"))?;
+        require_object_fields(entry, &format!("{label} {index}"), fields)?;
+    }
+    Ok(())
 }
 
 fn actors_contain_legacy_inventory(value: &serde_json::Value) -> bool {
@@ -289,7 +444,7 @@ fn quest_definitions_missing_giver(value: &serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{SnapshotStore, FORMAT_VERSION};
+    use super::{SnapshotStore, FORMAT_VERSION, LEGACY_FORMAT_VERSION};
     use crate::demo;
     use crate::model::{QuestDefinition, WorldState};
     use crate::runtime;
@@ -307,8 +462,190 @@ mod tests {
         let loaded = store.load().unwrap();
         assert_eq!(loaded.head, 7);
         assert_eq!(loaded.root(), state.root());
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        assert_eq!(saved["format_version"], json!(FORMAT_VERSION));
         assert!(!store.path().with_extension("json.tmp").exists());
         assert!(!store.path().with_extension("json.bak.tmp").exists());
+    }
+
+    #[test]
+    fn rewrites_previous_current_snapshot_as_current_version() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        state.head = 3;
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&json!({
+                "format_version": LEGACY_FORMAT_VERSION,
+                "state_root": state.root(),
+                "state": state
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.load().unwrap();
+        store.save(&loaded).unwrap();
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        assert_eq!(rewritten["format_version"], json!(FORMAT_VERSION));
+        assert_eq!(rewritten["state_root"], json!(loaded.root()));
+    }
+
+    #[test]
+    fn loads_previous_version_with_legacy_quest_defaults() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        state.quests.insert(
+            "legacy".into(),
+            QuestDefinition {
+                id: "legacy".into(),
+                title: "Legacy".into(),
+                giver_entity_id: 0,
+                prerequisite_quest_ids: Vec::new(),
+                required_item: "item".into(),
+                completion_zone: "zone".into(),
+                reward_balance: 0,
+                consume_required_item: false,
+            },
+        );
+        let state_root = state.root();
+        let mut state_value = serde_json::to_value(state).unwrap();
+        state_value["quests"]["legacy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("giver_entity_id");
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&json!({
+                "format_version": LEGACY_FORMAT_VERSION,
+                "state_root": state_root,
+                "state": state_value
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(store.load().unwrap().quests["legacy"].giver_entity_id, 0);
+    }
+
+    #[test]
+    fn current_version_rejects_missing_defaulted_state_fields() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let state = WorldState::genesis();
+        let state_root = state.root();
+        let mut state_value = serde_json::to_value(state).unwrap();
+        state_value.as_object_mut().unwrap().remove("inventories");
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&json!({
+                "format_version": FORMAT_VERSION,
+                "state_root": state_root,
+                "state": state_value
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = format!("{:#}", store.load().unwrap_err());
+        assert!(error.contains("state is missing field: inventories"));
+    }
+
+    #[test]
+    fn current_version_rejects_unknown_nested_fields() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        demo::initialize(&mut state).unwrap();
+        let state_root = state.root();
+        let mut state_value = serde_json::to_value(state).unwrap();
+        state_value["entities"]["4"]["ignored_admin_token"] = json!("must-not-survive");
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&json!({
+                "format_version": FORMAT_VERSION,
+                "state_root": state_root,
+                "state": state_value
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = format!("{:#}", store.load().unwrap_err());
+        assert!(error.contains("entity 4 contains unknown field: ignored_admin_token"));
+    }
+
+    #[test]
+    fn current_version_rejects_missing_defaulted_quest_fields() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        demo::initialize(&mut state).unwrap();
+        let state_root = state.root();
+        let mut state_value = serde_json::to_value(state).unwrap();
+        state_value["quests"]["lost_key"]
+            .as_object_mut()
+            .unwrap()
+            .remove("prerequisite_quest_ids");
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&json!({
+                "format_version": FORMAT_VERSION,
+                "state_root": state_root,
+                "state": state_value
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = format!("{:#}", store.load().unwrap_err());
+        assert!(error.contains("quest lost_key is missing field: prerequisite_quest_ids"));
+    }
+
+    #[test]
+    fn current_version_rejects_legacy_actor_inventory_marker() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        demo::initialize(&mut state).unwrap();
+        state
+            .entities
+            .get_mut(&4)
+            .unwrap()
+            .data
+            .insert("inventory".into(), json!([]));
+        let value = json!({
+            "format_version": FORMAT_VERSION,
+            "state_root": state.root(),
+            "state": state
+        });
+        fs::write(store.path(), serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let error = format!("{:#}", store.load().unwrap_err());
+        assert!(error.contains("contains legacy actor inventory data"));
+    }
+
+    #[test]
+    fn rejects_unknown_future_snapshot_version_before_loading_state() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&json!({
+                "format_version": FORMAT_VERSION + 1,
+                "state_root": "ignored",
+                "state": WorldState::genesis()
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = format!("{:#}", store.load().unwrap_err());
+        assert!(error.contains("unsupported snapshot format version"));
     }
 
     #[test]
