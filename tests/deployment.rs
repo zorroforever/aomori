@@ -5,6 +5,7 @@ const ENVIRONMENT: &str = include_str!("../deploy/systemd/aomori.env.example");
 const DOCKERFILE: &str = include_str!("../Dockerfile");
 const COMPOSE: &str = include_str!("../compose.yaml");
 const DOCKER_SMOKE: &str = include_str!("../scripts/docker-smoke.sh");
+const RPC_SMOKE: &str = include_str!("../scripts/rpc-smoke.sh");
 const CI: &str = include_str!("../.github/workflows/ci.yml");
 
 #[test]
@@ -117,6 +118,29 @@ fn docker_smoke_covers_runtime_identity_storage_and_restart() {
 }
 
 #[test]
+fn rpc_smoke_covers_runtime_auth_and_secret_boundaries() {
+    for required in [
+        "AOMORI_ADMIN_TOKEN",
+        "/health",
+        "/ready",
+        "/metrics",
+        "/metrics/prometheus",
+        "admin token leaked through server logs",
+        "aomori_create_account",
+        "aomori_command",
+        "incorrect-token",
+        "error.code == -32002",
+        "test -f \"$data_dir/state.json\"",
+    ] {
+        assert!(
+            RPC_SMOKE.contains(required),
+            "missing RPC smoke check: {required}"
+        );
+    }
+    assert!(!RPC_SMOKE.contains("echo \"$token\""));
+}
+
+#[test]
 fn ci_runs_quality_web_e2e_and_container_checks_with_minimal_permissions() {
     for required in [
         "permissions:\n  contents: read",
@@ -129,6 +153,9 @@ fn ci_runs_quality_web_e2e_and_container_checks_with_minimal_permissions() {
         "name: Web E2E",
         "playwright install --with-deps chromium",
         "actions/upload-artifact@v4",
+        "name: RPC smoke",
+        "cargo build --locked",
+        "./scripts/rpc-smoke.sh",
         "name: Docker smoke",
         "./scripts/docker-smoke.sh",
     ] {

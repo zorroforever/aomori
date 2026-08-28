@@ -68,6 +68,18 @@ journalctl -u aomori -f -o cat
 curl --fail http://127.0.0.1:8091/ready
 ```
 
+## HTTP/RPC smoke
+
+若要执行 HTTP/RPC 运行级 smoke 验证（需要已构建的二进制），运行：
+
+```bash
+source "$HOME/.cargo/env"
+cargo build --locked
+./scripts/rpc-smoke.sh
+```
+
+该脚本验证 `/health`、`/ready`、JSON/Prometheus metrics、管理 Token 鉴权、默认拒绝 unsigned command，以及状态快照生成；测试 Token 只存在于进程环境和内存中，结束时会清理临时数据和日志。
+
 ## 探针和监控
 
 - `/health` 是存活探针，只确认进程能够响应并返回当前状态摘要。

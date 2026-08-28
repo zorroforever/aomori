@@ -69,6 +69,16 @@ jobs:
           path: web/test-results/
           if-no-files-found: ignore
 
+  rpc-smoke:
+    name: RPC smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - run: ./scripts/rpc-smoke.sh
+
   docker:
     name: Docker smoke
     runs-on: ubuntu-24.04
