@@ -85,7 +85,7 @@ curl -s http://127.0.0.1:8091/ready | jq
 
 `/health` 返回当前 `head` 和 `state_root`；`/ready` 额外执行只读世界语义校验并检查快照数据目录。累计 RPC、快照和 WebSocket 指标可通过 JSON `GET /metrics` 或 Prometheus `GET /metrics/prometheus` 查看。每个进入 RPC handler 的请求响应包含 `X-Request-Id`，节点向 stderr 输出不含 params、Authorization、签名或请求 body 的 JSON 行日志。
 
-协议定义见 [`doc/api.md`](doc/api.md)，容器部署、备份、升级和告警建议见 [`doc/operations.md`](doc/operations.md)。
+协议定义见 [`doc/api.md`](doc/api.md)，容器与 systemd 部署、备份、升级和告警建议见 [`doc/operations.md`](doc/operations.md)。
 
 ## Docker
 
@@ -100,7 +100,7 @@ docker compose ps
 curl --fail http://127.0.0.1:8091/ready
 ```
 
-节点会处理 SIGINT/SIGTERM，停止接受新连接并等待在途请求结束。局域网或公网部署前请阅读运行手册中的监听地址、TLS、指标访问和数据卷备份说明。
+节点会处理 SIGINT/SIGTERM，停止接受新连接并等待在途请求结束。也提供 [`deploy/systemd/aomori.service`](deploy/systemd/aomori.service) 和 root-only [`deploy/systemd/aomori.env.example`](deploy/systemd/aomori.env.example)，用于固定非 root 用户的宿主机部署。局域网或公网部署前请阅读运行手册中的监听地址、TLS、指标访问和数据备份说明。
 
 Web 客户端默认连接页面所在主机的 `8091` 端口，也可在界面中覆盖 RPC 地址。Playwright 端到端测试会自动启动隔离的 Demo 节点和 Vite 服务。
 
