@@ -17,7 +17,17 @@ docker compose ps
 docker compose logs -f aomori
 ```
 
+若要执行完整的容器 smoke 验证（需要 Docker daemon 权限），运行：
+
+```bash
+./scripts/docker-smoke.sh
+```
+
+脚本会使用随机管理 Token、临时 Compose 项目和临时 named volume，构建镜像，检查 `/health` 与 `/ready`，验证容器 UID/GID、只读根文件系统、capability 删除和 `/data/state.json`，然后删除并重新创建容器确认数据卷可恢复。成功后会自动清理测试容器和数据卷；失败时先查看脚本输出和临时项目日志。当前用户若无 `/var/run/docker.sock` 访问权限，脚本会明确失败，不能作为验证通过。
+
 Compose 默认只把节点发布到宿主机 `127.0.0.1:8091`。推荐由同机反向代理终止 TLS，再代理 `/rpc`、`/events`、`/health` 和 `/ready`。只有在防火墙规则已经明确限制来源时，才把 `AOMORI_PUBLISH_ADDRESS` 设置为 `0.0.0.0`。
+
+
 
 RPC token bucket 默认直接使用 TCP 对端 IP，且忽略 `X-Forwarded-For`。如果反向代理与节点之间不是一对一的 loopback 连接，应将节点实际看到的代理 IP 以逗号分隔写入 `AOMORI_TRUSTED_PROXIES`；只接受精确 IP，不接受 CIDR。配置后节点会从右向左剥离受信代理地址。反向代理必须先删除客户端传入的 `X-Forwarded-For`，再用连接来源构造新链，否则攻击者可能伪造限流身份。不要把 `0.0.0.0`、任意客户端网段或不受控制的上游代理加入信任列表；信任同机 loopback 代理时，也必须确保节点端口不能被其他本地进程或容器直接访问。
 
