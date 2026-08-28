@@ -125,7 +125,8 @@ fn load_world(
     let loaded = store.load_with_status()?;
     let mut world = loaded.world;
     let snapshot_migrated = loaded.needs_rewrite;
-    let mut needs_save = snapshot_migrated;
+    let inventory_migrated = aomori::migration::migrate_legacy_inventories(&mut world)?;
+    let mut needs_save = snapshot_migrated || inventory_migrated;
     if demo && aomori::demo::ensure_current(&mut world)? {
         needs_save = true;
         eprintln!(
@@ -177,9 +178,10 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::load_world;
-    use aomori::model::WorldState;
+    use aomori::model::{EntityKind, WorldState};
     use aomori::storage::{SnapshotStore, FORMAT_VERSION};
     use serde_json::{json, Value};
+    use std::collections::BTreeMap;
     use std::fs;
     use tempfile::tempdir;
 
@@ -202,6 +204,63 @@ mod tests {
             .unwrap()
             .remove("prerequisite_quest_ids");
         value
+    }
+
+    fn legacy_world_snapshot() -> Value {
+        let mut state = WorldState::genesis();
+        let zone = aomori::runtime::create_entity(
+            &mut state,
+            EntityKind::Zone,
+            "admin".into(),
+            None,
+            None,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let actor = aomori::runtime::create_entity(
+            &mut state,
+            EntityKind::Actor,
+            "admin".into(),
+            None,
+            Some(zone),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let item = aomori::runtime::create_entity(
+            &mut state,
+            EntityKind::Item,
+            "admin".into(),
+            None,
+            Some(zone),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        state
+            .entities
+            .get_mut(&actor)
+            .unwrap()
+            .data
+            .insert("inventory".into(), json!([item]));
+        serde_json::to_value(state).unwrap()
+    }
+
+    #[test]
+    fn startup_migrates_inventory_without_demo_mode() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&legacy_world_snapshot()).unwrap(),
+        )
+        .unwrap();
+
+        let world = load_world(&store, false).unwrap();
+        assert_eq!(world.inventories[&2], vec![3]);
+        assert_eq!(world.entities[&3].location, Some(2));
+        assert!(!world.entities[&2].data.contains_key("inventory"));
+        world.validate().unwrap();
+        let snapshot: Value = serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        assert_eq!(snapshot["format_version"], json!(FORMAT_VERSION));
     }
 
     #[test]

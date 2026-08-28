@@ -113,6 +113,7 @@ pub fn ensure_current(state: &mut WorldState) -> Result<bool> {
         ));
     }
 
+    let inventory_migrated = crate::migration::migrate_legacy_inventories(state)?;
     let mut changed = false;
 
     let source_hash = blake3::hash(DEMO_SOURCE.as_bytes()).to_hex().to_string();
@@ -146,7 +147,6 @@ pub fn ensure_current(state: &mut WorldState) -> Result<bool> {
         .map(|(key, _)| key.clone())
         .collect();
     let mut legacy_progress = Vec::new();
-    let mut legacy_inventories = Vec::new();
     for entity in state.entities.values_mut() {
         let is_demo_actor = entity
             .contract
@@ -168,29 +168,6 @@ pub fn ensure_current(state: &mut WorldState) -> Result<bool> {
                 };
                 if let Some(status) = status {
                     legacy_progress.push((entity.id, status));
-                }
-            }
-            if let Some(items) = entity
-                .data
-                .remove("inventory")
-                .and_then(|value| value.as_array().cloned())
-            {
-                let items: Vec<u64> = items
-                    .into_iter()
-                    .filter_map(|value| value.as_u64())
-                    .collect();
-                legacy_inventories.push((entity.id, items));
-                changed = true;
-            }
-        }
-    }
-    for (actor_id, items) in legacy_inventories {
-        let inventory = state.inventories.entry(actor_id).or_default();
-        for item_id in items {
-            if state.entities.get(&item_id).map(|entity| &entity.kind) == Some(&EntityKind::Item) {
-                state.entities.get_mut(&item_id).unwrap().location = Some(actor_id);
-                if !inventory.contains(&item_id) {
-                    inventory.push(item_id);
                 }
             }
         }
@@ -259,7 +236,7 @@ pub fn ensure_current(state: &mut WorldState) -> Result<bool> {
     if changed {
         state.head += 1;
     }
-    Ok(changed)
+    Ok(changed || inventory_migrated)
 }
 
 fn lost_key_quest(giver_entity_id: u64) -> QuestDefinition {
