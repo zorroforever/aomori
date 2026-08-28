@@ -225,6 +225,32 @@ async fn cors_allows_only_configured_browser_origin() {
         "http://127.0.0.1:5173"
     );
 
+    let actual = app
+        .clone()
+        .oneshot(
+            Request::post("/rpc")
+                .header("origin", "http://127.0.0.1:5173")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"jsonrpc":"2.0","id":1,"method":"aomori_get_info","params":{}})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(actual.status(), StatusCode::OK);
+    assert_eq!(actual.headers()["x-request-id"], "1");
+    assert_eq!(
+        actual.headers()["access-control-allow-origin"],
+        "http://127.0.0.1:5173"
+    );
+    assert!(actual.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap()
+        .split(',')
+        .any(|header| header.trim().eq_ignore_ascii_case("x-request-id")));
+
     let denied = app
         .oneshot(
             Request::builder()
@@ -269,6 +295,7 @@ async fn rpc_rate_limit_returns_429_and_recovers_next_window() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["x-request-id"], "3");
     assert_eq!(response.headers()["retry-after"], "1");
     assert_eq!(response.headers()["cache-control"], "no-store");
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -283,6 +310,14 @@ async fn rpc_rate_limit_returns_429_and_recovers_next_window() {
         .await
         .get("result")
         .is_some());
+
+    let metrics = get_json(&app, "/metrics").await;
+    assert_eq!(metrics["rpc"]["requests"], json!(4));
+    assert_eq!(metrics["rpc"]["errors_by_code"]["-32004"], json!(1));
+    assert_eq!(
+        metrics["rpc"]["methods"]["<rate_limited>"]["requests"],
+        json!(1)
+    );
 }
 
 #[tokio::test]
@@ -351,6 +386,44 @@ async fn health_reports_loaded_world() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["ok"], json!(true));
     assert!(body["state_root"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn readiness_rejects_invalid_world_without_affecting_liveness_or_leaking_details() {
+    let (app, state, _dir) = app_with_event_capacity(32);
+    state.lock().unwrap().world.next_event_id = 0;
+
+    let ready = app
+        .clone()
+        .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value =
+        serde_json::from_slice(&ready.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body, json!({"ready":false,"error":"state unavailable"}));
+    assert!(!body.to_string().contains("next_event_id"));
+
+    let health = app
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(health.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn readiness_rejects_a_missing_snapshot_directory() {
+    let (app, _state, dir) = app_with_event_capacity(32);
+    fs::remove_dir_all(dir.path()).unwrap();
+
+    let ready = app
+        .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value =
+        serde_json::from_slice(&ready.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body, json!({"ready":false,"error":"state unavailable"}));
 }
 
 #[tokio::test]
@@ -428,6 +501,54 @@ async fn readiness_and_metrics_report_rpc_activity_without_unbounded_method_labe
     assert!(body["rpc"]["methods"]
         .get("attacker-random-label")
         .is_none());
+}
+
+#[tokio::test]
+async fn authorization_failures_receive_request_ids_and_bounded_metrics() {
+    let (app, _dir) = app();
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post("/rpc")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer do-not-expose-this-token")
+                .body(Body::from(
+                    json!({
+                        "jsonrpc":"2.0",
+                        "id":1,
+                        "method":"aomori_create_account",
+                        "params":{"name":"do-not-expose-this-account"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::OK);
+    assert_eq!(unauthorized.headers()["x-request-id"], "1");
+    let body = String::from_utf8(
+        unauthorized
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("admin authorization required"));
+    assert!(!body.contains("do-not-expose-this-token"));
+    assert!(!body.contains("do-not-expose-this-account"));
+
+    let metrics = get_json(&app, "/metrics").await;
+    assert_eq!(metrics["rpc"]["requests"], json!(1));
+    assert_eq!(metrics["rpc"]["errors_by_code"]["-32002"], json!(1));
+    assert_eq!(
+        metrics["rpc"]["methods"]["aomori_create_account"]["errors"],
+        json!(1)
+    );
+    assert!(!metrics.to_string().contains("do-not-expose"));
 }
 
 #[tokio::test]
