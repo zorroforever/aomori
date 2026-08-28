@@ -69,7 +69,7 @@ Compose 和镜像都使用 `/ready` 作为 healthcheck。指标端点当前未�
 
 ## 升级和回滚
 
-写入的快照 envelope 当前为 `format_version: 2`。v2 要求当前 schema 的集合、任务、合约和事件字段全部显式存在，并在 state root 校验后执行完整世界校验；缺字段不会再由反序列化默认值静默补齐。节点仍可读取 `format_version: 1` 和更早的裸 `WorldState`，但它们只作为启动迁移输入：启动时会先执行已启用的世界迁移和完整校验，再原子重写为 v2，并输出 `snapshot_migrated` 结构化日志。旧 `actor.data.inventory` 会对所有 Actor 迁移到正式 Inventory；非数组、非整数、重复认领、缺失实体或非 Item 引用都会拒绝迁移。迁移或校验失败不会改写原快照，应停止升级并检查数据，不能依靠重复重启跳过。未知的未来版本会被拒绝，也不能通过降级二进制强行打开。
+写入的快照 envelope 当前为 `format_version: 2`。v2 要求当前 schema 的集合、任务、合约和事件字段全部显式存在，并在 state root 校验后执行完整世界校验；缺字段不会再由反序列化默认值静默补齐。节点仍可读取 `format_version: 1` 和更早的裸 `WorldState`，但它们只作为启动迁移输入：启动时会先执行已注册的连续格式迁移、已启用的世界迁移和完整校验，再原子重写为 v2。`snapshot_migrated` 结构化日志包含 `from_format_version`、`to_format_version` 和固定 `steps`；裸快照的来源版本为 `null`，日志不包含世界 payload。未来格式只有在代码中存在从来源版本到当前版本的连续注册路径时才能加载，缺少任一步都会拒绝启动。旧 `actor.data.inventory` 会对所有 Actor 迁移到正式 Inventory；非数组、非整数、重复认领、缺失实体或非 Item 引用都会拒绝迁移。迁移或校验失败不会改写原快照，应停止升级并检查数据，不能依靠重复重启跳过。未知的未来版本会被拒绝，也不能通过降级二进制强行打开。
 
 ### Compose 升级
 

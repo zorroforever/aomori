@@ -123,9 +123,21 @@ fn load_world(
     demo: bool,
 ) -> Result<aomori::model::WorldState> {
     let loaded = store.load_with_status()?;
-    let mut world = loaded.world;
     let snapshot_migrated = loaded.needs_rewrite;
+    let source_format_version = loaded.source_format_version;
+    let mut migration_steps: Vec<String> = loaded
+        .format_migrations
+        .iter()
+        .map(|migration| migration.name.into())
+        .collect();
+    if snapshot_migrated && source_format_version.is_none() {
+        migration_steps.push("pre_versioned_snapshot_import".into());
+    }
+    let mut world = loaded.world;
     let inventory_migrated = aomori::migration::migrate_legacy_inventories(&mut world)?;
+    if inventory_migrated {
+        migration_steps.push("legacy_actor_inventory_to_inventories".into());
+    }
     let mut needs_save = snapshot_migrated || inventory_migrated;
     if demo && aomori::demo::ensure_current(&mut world)? {
         needs_save = true;
@@ -143,7 +155,10 @@ fn load_world(
             "{}",
             serde_json::json!({
                 "type":"snapshot_migrated",
-                "format_version":aomori::storage::FORMAT_VERSION
+                "from_format_version":source_format_version,
+                "to_format_version":aomori::storage::FORMAT_VERSION,
+                "format_version":aomori::storage::FORMAT_VERSION,
+                "steps":migration_steps
             })
         );
     }

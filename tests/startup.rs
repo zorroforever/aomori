@@ -82,12 +82,23 @@ fn binary_startup_migrates_legacy_demo_and_becomes_ready() {
         .iter()
         .find(|entry| entry["type"] == "snapshot_migrated")
         .unwrap_or_else(|| panic!("missing snapshot migration log: {stderr}"));
-    assert_eq!(migration["format_version"], json!(FORMAT_VERSION));
+    assert_eq!(
+        migration,
+        &json!({
+            "type":"snapshot_migrated",
+            "from_format_version":null,
+            "to_format_version":FORMAT_VERSION,
+            "format_version":FORMAT_VERSION,
+            "steps":[
+                "pre_versioned_snapshot_import",
+                "legacy_actor_inventory_to_inventories"
+            ]
+        })
+    );
     assert!(
         logs.iter().any(|entry| entry["type"] == "state_loaded"),
         "{stderr}"
     );
-    assert!(!stderr.contains("inventory"));
 
     let snapshot: Value = serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
     assert_eq!(snapshot["format_version"], json!(FORMAT_VERSION));

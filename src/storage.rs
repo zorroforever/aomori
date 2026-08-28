@@ -8,6 +8,19 @@ use std::path::{Path, PathBuf};
 const LEGACY_FORMAT_VERSION: u32 = 1;
 pub const FORMAT_VERSION: u32 = 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormatMigration {
+    pub from_version: u32,
+    pub to_version: u32,
+    pub name: &'static str,
+}
+
+const FORMAT_MIGRATIONS: &[FormatMigration] = &[FormatMigration {
+    from_version: LEGACY_FORMAT_VERSION,
+    to_version: FORMAT_VERSION,
+    name: "snapshot_format_1_to_2",
+}];
+
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     format_version: u32,
@@ -18,11 +31,15 @@ struct Snapshot {
 #[derive(Debug)]
 pub struct LoadedSnapshot {
     pub world: WorldState,
+    pub source_format_version: Option<u32>,
+    pub format_migrations: Vec<FormatMigration>,
     pub needs_rewrite: bool,
 }
 
 struct DecodedSnapshot {
     world: WorldState,
+    source_format_version: Option<u32>,
+    format_migrations: Vec<FormatMigration>,
     needs_rewrite: bool,
 }
 
@@ -48,12 +65,16 @@ impl SnapshotStore {
         if !self.path.exists() {
             return Ok(LoadedSnapshot {
                 world: WorldState::genesis(),
+                source_format_version: None,
+                format_migrations: Vec::new(),
                 needs_rewrite: false,
             });
         }
         match decode(&self.path) {
             Ok(decoded) => Ok(LoadedSnapshot {
                 world: decoded.world,
+                source_format_version: decoded.source_format_version,
+                format_migrations: decoded.format_migrations,
                 needs_rewrite: decoded.needs_rewrite,
             }),
             Err(primary_error) => {
@@ -78,6 +99,8 @@ impl SnapshotStore {
                 })?;
                 Ok(LoadedSnapshot {
                     world: decoded.world,
+                    source_format_version: decoded.source_format_version,
+                    format_migrations: decoded.format_migrations,
                     needs_rewrite: decoded.needs_rewrite,
                 })
             }
@@ -225,6 +248,8 @@ fn decode(path: &Path) -> Result<DecodedSnapshot> {
         validate_legacy_state(&state, legacy_quest_schema, legacy_inventory_schema)?;
         return Ok(DecodedSnapshot {
             world: state,
+            source_format_version: None,
+            format_migrations: Vec::new(),
             needs_rewrite: true,
         });
     }
@@ -235,11 +260,7 @@ fn decode(path: &Path) -> Result<DecodedSnapshot> {
         .and_then(|version| u32::try_from(version).ok())
         .filter(|version| *version > 0)
         .ok_or_else(|| anyhow!("snapshot format_version must be a positive integer"))?;
-    if !matches!(format_version, LEGACY_FORMAT_VERSION | FORMAT_VERSION) {
-        return Err(anyhow!(
-            "unsupported snapshot format version: {format_version}"
-        ));
-    }
+    let format_migrations = format_migration_path(format_version, FORMAT_VERSION)?;
     if format_version == FORMAT_VERSION {
         validate_current_schema(&value)?;
     }
@@ -269,8 +290,39 @@ fn decode(path: &Path) -> Result<DecodedSnapshot> {
     }
     Ok(DecodedSnapshot {
         world: snapshot.state,
+        source_format_version: Some(snapshot.format_version),
+        format_migrations,
         needs_rewrite: snapshot.format_version != FORMAT_VERSION,
     })
+}
+
+fn format_migration_path(from: u32, target: u32) -> Result<Vec<FormatMigration>> {
+    let mut version = from;
+    let mut path = Vec::new();
+    while version != target {
+        let mut migrations = FORMAT_MIGRATIONS
+            .iter()
+            .filter(|migration| migration.from_version == version);
+        let Some(migration) = migrations.next() else {
+            return Err(anyhow!(
+                "unsupported snapshot format version: {from}; no migration from version {version} to {target}"
+            ));
+        };
+        if migrations.next().is_some() {
+            return Err(anyhow!(
+                "ambiguous snapshot migrations from version {version}"
+            ));
+        }
+        if migration.to_version <= version {
+            return Err(anyhow!(
+                "invalid snapshot migration: {version} to {}",
+                migration.to_version
+            ));
+        }
+        path.push(*migration);
+        version = migration.to_version;
+    }
+    Ok(path)
 }
 
 fn validate_legacy_state(
@@ -476,7 +528,10 @@ fn quest_definitions_missing_giver(value: &serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{SnapshotStore, FORMAT_VERSION, LEGACY_FORMAT_VERSION};
+    use super::{
+        format_migration_path, SnapshotStore, FORMAT_MIGRATIONS, FORMAT_VERSION,
+        LEGACY_FORMAT_VERSION,
+    };
     use crate::demo;
     use crate::model::{QuestDefinition, WorldState};
     use crate::runtime;
@@ -485,11 +540,28 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn registered_format_migrations_are_contiguous_to_current() {
+        assert_eq!(
+            format_migration_path(LEGACY_FORMAT_VERSION, FORMAT_VERSION).unwrap(),
+            FORMAT_MIGRATIONS
+        );
+        assert!(format_migration_path(FORMAT_VERSION, FORMAT_VERSION)
+            .unwrap()
+            .is_empty());
+        let error = format_migration_path(FORMAT_VERSION + 1, FORMAT_VERSION)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no migration from version"));
+    }
+
+    #[test]
     fn new_store_does_not_require_snapshot_rewrite() {
         let dir = tempdir().unwrap();
         let store = SnapshotStore::new(dir.path()).unwrap();
         let loaded = store.load_with_status().unwrap();
         assert!(!loaded.needs_rewrite);
+        assert_eq!(loaded.source_format_version, None);
+        assert!(loaded.format_migrations.is_empty());
         assert_eq!(loaded.world.root(), WorldState::genesis().root());
         assert!(!store.path().exists());
     }
@@ -503,6 +575,8 @@ mod tests {
         store.save(&state).unwrap();
         let loaded = store.load_with_status().unwrap();
         assert!(!loaded.needs_rewrite);
+        assert_eq!(loaded.source_format_version, Some(FORMAT_VERSION));
+        assert!(loaded.format_migrations.is_empty());
         assert_eq!(loaded.world.head, 7);
         assert_eq!(loaded.world.root(), state.root());
         let saved: serde_json::Value =
@@ -531,6 +605,8 @@ mod tests {
 
         let loaded = store.load_with_status().unwrap();
         assert!(loaded.needs_rewrite);
+        assert_eq!(loaded.source_format_version, Some(LEGACY_FORMAT_VERSION));
+        assert_eq!(loaded.format_migrations, FORMAT_MIGRATIONS);
         store.save(&loaded.world).unwrap();
         let rewritten: serde_json::Value =
             serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
@@ -864,7 +940,11 @@ mod tests {
         let mut state = WorldState::genesis();
         state.head = 3;
         fs::write(store.path(), serde_json::to_vec(&state).unwrap()).unwrap();
-        assert_eq!(store.load().unwrap().head, 3);
+        let loaded = store.load_with_status().unwrap();
+        assert!(loaded.needs_rewrite);
+        assert_eq!(loaded.source_format_version, None);
+        assert!(loaded.format_migrations.is_empty());
+        assert_eq!(loaded.world.head, 3);
     }
 
     #[test]
@@ -887,6 +967,8 @@ mod tests {
 
         let loaded = store.load_with_status().unwrap();
         assert!(loaded.needs_rewrite);
+        assert_eq!(loaded.source_format_version, Some(LEGACY_FORMAT_VERSION));
+        assert_eq!(loaded.format_migrations, FORMAT_MIGRATIONS);
         assert_eq!(loaded.world.head, 9);
         let restored: serde_json::Value =
             serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
