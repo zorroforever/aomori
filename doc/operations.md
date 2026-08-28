@@ -34,7 +34,7 @@ Compose 和镜像都使用 `/ready` 作为 healthcheck。指标端点当前未�
 
 ## 升级和回滚
 
-写入的快照 envelope 当前为 `format_version: 2`。v2 要求当前 schema 的集合、任务、合约和事件字段全部显式存在，并在 state root 校验后执行完整世界校验；缺字段不会再由反序列化默认值静默补齐。节点仍可读取 `format_version: 1` 和更早的裸 `WorldState`，但它们只作为启动迁移输入；下一次成功写入会生成 v2。未知的未来版本会被拒绝，不能通过降级二进制强行打开。
+写入的快照 envelope 当前为 `format_version: 2`。v2 要求当前 schema 的集合、任务、合约和事件字段全部显式存在，并在 state root 校验后执行完整世界校验；缺字段不会再由反序列化默认值静默补齐。节点仍可读取 `format_version: 1` 和更早的裸 `WorldState`，但它们只作为启动迁移输入：启动时会先执行已启用的世界迁移和完整校验，再原子重写为 v2，并输出 `snapshot_migrated` 结构化日志。迁移或校验失败不会改写原快照。未知的未来版本会被拒绝，不能通过降级二进制强行打开。
 
 升级前先备份 named volume。项目目录名会影响 Compose 自动生成的 volume 名称，因此先运行 `docker volume ls` 确认实际名称，再替换下面的 `aomori_aomori-data`：
 

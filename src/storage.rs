@@ -6,13 +6,24 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const LEGACY_FORMAT_VERSION: u32 = 1;
-const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     format_version: u32,
     state_root: String,
     state: WorldState,
+}
+
+#[derive(Debug)]
+pub struct LoadedSnapshot {
+    pub world: WorldState,
+    pub needs_rewrite: bool,
+}
+
+struct DecodedSnapshot {
+    world: WorldState,
+    needs_rewrite: bool,
 }
 
 #[derive(Clone)]
@@ -30,18 +41,28 @@ impl SnapshotStore {
     }
 
     pub fn load(&self) -> Result<WorldState> {
+        Ok(self.load_with_status()?.world)
+    }
+
+    pub fn load_with_status(&self) -> Result<LoadedSnapshot> {
         if !self.path.exists() {
-            return Ok(WorldState::genesis());
+            return Ok(LoadedSnapshot {
+                world: WorldState::genesis(),
+                needs_rewrite: false,
+            });
         }
         match decode(&self.path) {
-            Ok(state) => Ok(state),
+            Ok(decoded) => Ok(LoadedSnapshot {
+                world: decoded.world,
+                needs_rewrite: decoded.needs_rewrite,
+            }),
             Err(primary_error) => {
                 let backup = self.backup_path();
                 if !backup.exists() {
                     return Err(primary_error)
                         .with_context(|| format!("invalid snapshot {}", self.path.display()));
                 }
-                let state = decode(&backup).with_context(|| {
+                let decoded = decode(&backup).with_context(|| {
                     format!(
                         "primary snapshot {} is invalid ({primary_error}); backup {} is also invalid",
                         self.path.display(),
@@ -55,7 +76,10 @@ impl SnapshotStore {
                         backup.display()
                     )
                 })?;
-                Ok(state)
+                Ok(LoadedSnapshot {
+                    world: decoded.world,
+                    needs_rewrite: decoded.needs_rewrite,
+                })
             }
         }
     }
@@ -77,6 +101,8 @@ impl SnapshotStore {
             state_root: state.root(),
             state: state.clone(),
         };
+        let snapshot = serde_json::to_value(snapshot)?;
+        validate_current_schema(&snapshot).context("validate current snapshot schema")?;
         let bytes = serde_json::to_vec_pretty(&snapshot)?;
         let result = (|| {
             write_synced(&temporary, &bytes)
@@ -187,7 +213,7 @@ fn rollback_primary(target: &Path, previous: Option<&[u8]>) -> Result<()> {
     }
 }
 
-fn decode(path: &Path) -> Result<WorldState> {
+fn decode(path: &Path) -> Result<DecodedSnapshot> {
     let bytes = fs::read(path).with_context(|| format!("read snapshot {}", path.display()))?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse snapshot {}", path.display()))?;
@@ -197,7 +223,10 @@ fn decode(path: &Path) -> Result<WorldState> {
         let state: WorldState = serde_json::from_value(value)
             .with_context(|| format!("parse legacy snapshot {}", path.display()))?;
         validate_legacy_state(&state, legacy_quest_schema, legacy_inventory_schema)?;
-        return Ok(state);
+        return Ok(DecodedSnapshot {
+            world: state,
+            needs_rewrite: true,
+        });
     }
 
     let format_version = value
@@ -238,7 +267,10 @@ fn decode(path: &Path) -> Result<WorldState> {
             .validate()
             .context("validate current snapshot state")?;
     }
-    Ok(snapshot.state)
+    Ok(DecodedSnapshot {
+        world: snapshot.state,
+        needs_rewrite: snapshot.format_version != FORMAT_VERSION,
+    })
 }
 
 fn validate_legacy_state(
@@ -453,15 +485,26 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn new_store_does_not_require_snapshot_rewrite() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let loaded = store.load_with_status().unwrap();
+        assert!(!loaded.needs_rewrite);
+        assert_eq!(loaded.world.root(), WorldState::genesis().root());
+        assert!(!store.path().exists());
+    }
+
+    #[test]
     fn saves_and_loads_state() {
         let dir = tempdir().unwrap();
         let store = SnapshotStore::new(dir.path()).unwrap();
         let mut state = WorldState::genesis();
         state.head = 7;
         store.save(&state).unwrap();
-        let loaded = store.load().unwrap();
-        assert_eq!(loaded.head, 7);
-        assert_eq!(loaded.root(), state.root());
+        let loaded = store.load_with_status().unwrap();
+        assert!(!loaded.needs_rewrite);
+        assert_eq!(loaded.world.head, 7);
+        assert_eq!(loaded.world.root(), state.root());
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
         assert_eq!(saved["format_version"], json!(FORMAT_VERSION));
@@ -486,12 +529,13 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = store.load().unwrap();
-        store.save(&loaded).unwrap();
+        let loaded = store.load_with_status().unwrap();
+        assert!(loaded.needs_rewrite);
+        store.save(&loaded.world).unwrap();
         let rewritten: serde_json::Value =
             serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
         assert_eq!(rewritten["format_version"], json!(FORMAT_VERSION));
-        assert_eq!(rewritten["state_root"], json!(loaded.root()));
+        assert_eq!(rewritten["state_root"], json!(loaded.world.root()));
     }
 
     #[test]
@@ -649,6 +693,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_actor_inventory_is_not_saved_as_current_schema() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        demo::initialize(&mut state).unwrap();
+        state
+            .entities
+            .get_mut(&4)
+            .unwrap()
+            .data
+            .insert("inventory".into(), json!([5]));
+
+        let error = format!("{:#}", store.save(&state).unwrap_err());
+        assert!(error.contains("contains legacy actor inventory data"));
+        assert!(!store.path().exists());
+    }
+
+    #[test]
     fn invalid_quest_definition_is_not_saved() {
         let dir = tempdir().unwrap();
         let store = SnapshotStore::new(dir.path()).unwrap();
@@ -803,6 +865,32 @@ mod tests {
         state.head = 3;
         fs::write(store.path(), serde_json::to_vec(&state).unwrap()).unwrap();
         assert_eq!(store.load().unwrap().head, 3);
+    }
+
+    #[test]
+    fn legacy_backup_recovery_still_requires_rewrite() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        state.head = 9;
+        fs::write(
+            store.backup_path(),
+            serde_json::to_vec(&json!({
+                "format_version": LEGACY_FORMAT_VERSION,
+                "state_root": state.root(),
+                "state": state
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(store.path(), b"corrupted").unwrap();
+
+        let loaded = store.load_with_status().unwrap();
+        assert!(loaded.needs_rewrite);
+        assert_eq!(loaded.world.head, 9);
+        let restored: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        assert_eq!(restored["format_version"], json!(LEGACY_FORMAT_VERSION));
     }
 
     #[test]

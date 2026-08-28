@@ -70,15 +70,7 @@ async fn main() -> Result<()> {
         }
     }
     let store = aomori::storage::SnapshotStore::new(&args.data_dir)?;
-    let mut world = store.load()?;
-    if args.demo && aomori::demo::ensure_current(&mut world)? {
-        store.save(&world)?;
-        eprintln!(
-            "{}",
-            serde_json::json!({"type":"demo_initialized_or_upgraded"})
-        );
-    }
-    world.validate()?;
+    let world = load_world(&store, args.demo)?;
     eprintln!(
         "{}",
         serde_json::json!({
@@ -126,6 +118,37 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn load_world(
+    store: &aomori::storage::SnapshotStore,
+    demo: bool,
+) -> Result<aomori::model::WorldState> {
+    let loaded = store.load_with_status()?;
+    let mut world = loaded.world;
+    let snapshot_migrated = loaded.needs_rewrite;
+    let mut needs_save = snapshot_migrated;
+    if demo && aomori::demo::ensure_current(&mut world)? {
+        needs_save = true;
+        eprintln!(
+            "{}",
+            serde_json::json!({"type":"demo_initialized_or_upgraded"})
+        );
+    }
+    world.validate()?;
+    if needs_save {
+        store.save(&world)?;
+    }
+    if snapshot_migrated {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "type":"snapshot_migrated",
+                "format_version":aomori::storage::FORMAT_VERSION
+            })
+        );
+    }
+    Ok(world)
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -149,4 +172,74 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
     eprintln!("{}", serde_json::json!({"type":"shutdown_requested"}));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_world;
+    use aomori::model::WorldState;
+    use aomori::storage::{SnapshotStore, FORMAT_VERSION};
+    use serde_json::{json, Value};
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn legacy_demo_snapshot() -> Value {
+        let mut state = WorldState::genesis();
+        aomori::demo::initialize(&mut state).unwrap();
+        state
+            .entities
+            .get_mut(&4)
+            .unwrap()
+            .data
+            .insert("inventory".into(), json!([5]));
+        let mut value = serde_json::to_value(state).unwrap();
+        value["quests"]["lost_key"]
+            .as_object_mut()
+            .unwrap()
+            .remove("giver_entity_id");
+        value["quests"]["lost_key"]
+            .as_object_mut()
+            .unwrap()
+            .remove("prerequisite_quest_ids");
+        value
+    }
+
+    #[test]
+    fn startup_migrates_legacy_demo_snapshot_and_rewrites_current_format() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&legacy_demo_snapshot()).unwrap(),
+        )
+        .unwrap();
+
+        let world = load_world(&store, true).unwrap();
+        assert!(world.entities[&4].data.get("inventory").is_none());
+        assert_eq!(world.inventories[&4], vec![5]);
+        assert_eq!(world.entities[&5].location, Some(4));
+        assert_ne!(world.quests["lost_key"].giver_entity_id, 0);
+        world.validate().unwrap();
+
+        let rewritten: Value = serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        assert_eq!(rewritten["format_version"], json!(FORMAT_VERSION));
+        let loaded = store.load_with_status().unwrap();
+        assert!(!loaded.needs_rewrite);
+        assert_eq!(loaded.world.root(), world.root());
+    }
+
+    #[test]
+    fn startup_does_not_rewrite_unmigrated_legacy_schema() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let bytes = serde_json::to_vec(&legacy_demo_snapshot()).unwrap();
+        fs::write(store.path(), &bytes).unwrap();
+
+        let error = format!("{:#}", load_world(&store, false).unwrap_err());
+        assert!(
+            error.contains("quest lost_key giver does not exist"),
+            "{error}"
+        );
+        assert_eq!(fs::read(store.path()).unwrap(), bytes);
+    }
 }
