@@ -112,14 +112,28 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   await expect(page.locator('#balance')).toHaveText('20');
   await expect(page.locator('#receipt')).toContainText('SUCCESS');
   await expect(page.locator('#eventList')).toContainText('quest_completed');
+  const eventCursor = await page.evaluate(() => Object.entries(localStorage).find(([key]) => key.startsWith('aomori:event-cursor:'))?.[1]);
+  expect(Number(eventCursor)).toBeGreaterThan(0);
 
   await page.reload();
   await page.locator('#actorInput').fill('9');
   await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#eventList')).toContainText('等待事件');
   await expect(page.locator('#writeMode')).toContainText('身份已锁定');
   page.once('dialog', dialog => dialog.accept('backup-password'));
   await page.getByRole('button', { name: '解锁本地身份' }).click();
   await expect(page.locator('#writeMode')).toContainText('签名交易');
   await expect(page.locator('#questList')).toContainText('completed');
   await expect(page.locator('#balance')).toHaveText('20');
+
+  await page.evaluate(() => {
+    const cursorKey = Object.keys(localStorage).find(key => key.startsWith('aomori:event-cursor:'));
+    if (cursorKey) localStorage.setItem(cursorKey, String(Number.MAX_SAFE_INTEGER));
+  });
+  await page.reload();
+  await page.locator('#actorInput').fill('9');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#eventList')).toContainText('quest_completed');
+  const recoveredCursor = await page.evaluate(() => Number(Object.entries(localStorage).find(([key]) => key.startsWith('aomori:event-cursor:'))?.[1]));
+  expect(recoveredCursor).toBeLessThan(Number.MAX_SAFE_INTEGER);
 });

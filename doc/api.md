@@ -148,7 +148,9 @@ The Demo contains two independent quests and one chained quest:
 {"since":0,"limit":100}
 ```
 
-`since` is exclusive. `limit` defaults to 100 and is capped at 500. The response contains `events` and `next`.
+`since` is exclusive. `limit` defaults to 100 and is capped at 500. The response contains `events`, `next`, and `latest`. `next` is the last event in the returned page, or the requested `since` value for an empty page. `latest` is the node's current event ID, or zero when the log is empty; clients can reset a persisted cursor when it is greater than `latest`, which indicates that the world at that RPC URL was replaced.
+
+The bundled Web client persists this non-sensitive cursor in `localStorage`, scoped by RPC URL. It does not persist event payloads.
 
 ### `aomori_query`
 
@@ -319,7 +321,7 @@ Clients should maintain the greatest processed event `id`:
 1. Connect to `/events` for live events.
 2. On WebSocket open, disconnect, reconnect, or `event_stream_lagged`, call `aomori_get_events` from the cursor captured at recovery start.
 3. Request pages of up to 500 events until a short or empty page is returned.
-4. Process results in ascending ID order and update the cursor.
+4. Process results in ascending ID order and persist the cursor. If the server's `latest` value is lower than the persisted cursor, reset the cursor to zero and recover the replacement world's event log.
 5. Keep the WebSocket open during lag recovery and deduplicate all HTTP and WebSocket events by ID.
 
 ## Health, Readiness, and Metrics

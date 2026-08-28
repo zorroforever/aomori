@@ -961,7 +961,8 @@ fn dispatch(state: &SharedState, method: &str, p: Value) -> anyhow::Result<Value
                 .take(limit)
                 .collect();
             let next = events.last().map(|event| event.id).unwrap_or(since);
-            Ok(json!({"events":events,"next":next}))
+            let latest = s.world.events.last().map(|event| event.id).unwrap_or(0);
+            Ok(json!({"events":events,"next":next,"latest":latest}))
         }
         "aomori_get_info" => Ok(json!({
             "protocol_version":1,

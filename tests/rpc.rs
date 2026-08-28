@@ -1,5 +1,5 @@
 use aomori::demo;
-use aomori::model::{Transaction, WorldState};
+use aomori::model::{Transaction, WorldEvent, WorldState};
 use aomori::rpc::{self, AppState};
 use aomori::storage::SnapshotStore;
 use axum::body::Body;
@@ -104,6 +104,48 @@ async fn rpc_from(
     let body =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     (status, body)
+}
+
+fn app_with_event_capacity(capacity: usize) -> (axum::Router, rpc::SharedState, TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SnapshotStore::new(dir.path()).unwrap();
+    let mut world = WorldState::genesis();
+    demo::initialize(&mut world).unwrap();
+    let (events, _) = broadcast::channel(capacity);
+    let state = Arc::new(Mutex::new(AppState {
+        world,
+        store,
+        events,
+        lua_limits: aomori::runtime::LuaLimits::default(),
+        admin_token: Some("test-admin-token".into()),
+        allow_unsigned_commands: true,
+        cors_origins: vec!["http://127.0.0.1:5173".into()],
+        trusted_proxies: Default::default(),
+        rate_limiter: rpc::RateLimiter::new(10_000),
+        observability: rpc::Observability::default(),
+    }));
+    (rpc::router(state.clone()), state, dir)
+}
+
+fn append_test_events(state: &rpc::SharedState, count: usize) -> Vec<WorldEvent> {
+    let mut state = state.lock().unwrap();
+    let mut events = Vec::with_capacity(count);
+    for _ in 0..count {
+        let event = WorldEvent {
+            id: state.world.next_event_id,
+            head: state.world.head,
+            kind: "test_event".into(),
+            entity_id: None,
+            data: json!({}),
+        };
+        state.world.next_event_id += 1;
+        state.world.events.push(event.clone());
+        events.push(event);
+    }
+    for event in &events {
+        state.events.send(event.clone()).unwrap();
+    }
+    events
 }
 
 async fn raw_body(app: &axum::Router, body: impl Into<Body>) -> (StatusCode, Value) {
@@ -719,6 +761,77 @@ async fn websocket_only_pushes_events_for_successful_commands() {
     let disconnected_metrics = get_json(&app, "/metrics").await;
     assert_eq!(disconnected_metrics["websocket"]["active"], json!(0));
     assert_eq!(disconnected_metrics["websocket"]["connections"], json!(1));
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_lag_recovers_all_events_over_http_and_continues_after_reconnect() {
+    let (app, state, _dir) = app_with_event_capacity(2);
+    let initial_event_id = state.lock().unwrap().world.next_event_id - 1;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(axum::serve(listener, app.clone()).into_future());
+    let (mut socket, _) = connect_async(format!("ws://{address}/events"))
+        .await
+        .unwrap();
+
+    let sent = append_test_events(&state, 8);
+    let message = timeout(Duration::from_secs(1), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let lagged: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+    assert_eq!(lagged["type"], json!("event_stream_lagged"));
+    assert_eq!(lagged["missed"], json!(6));
+    assert_eq!(lagged["last_event_id"], json!(0));
+
+    let metrics = get_json(&app, "/metrics").await;
+    assert_eq!(metrics["websocket"]["lag_incidents"], json!(1));
+    assert_eq!(metrics["websocket"]["missed_events"], json!(6));
+
+    let recovered = request(
+        &app,
+        "aomori_get_events",
+        json!({"since":initial_event_id,"limit":500}),
+    )
+    .await;
+    let recovered_ids: Vec<u64> = recovered["result"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        recovered_ids,
+        sent.iter().map(|event| event.id).collect::<Vec<_>>()
+    );
+    assert_eq!(recovered["result"]["next"], json!(sent.last().unwrap().id));
+    assert_eq!(
+        recovered["result"]["latest"],
+        json!(sent.last().unwrap().id)
+    );
+
+    socket.close(None).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (mut reconnected, _) = connect_async(format!("ws://{address}/events"))
+        .await
+        .unwrap();
+    let next = append_test_events(&state, 1).pop().unwrap();
+    let message = timeout(Duration::from_secs(1), reconnected.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let event: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+    assert_eq!(event["id"], json!(next.id));
+    assert_eq!(event["kind"], json!("test_event"));
+
+    reconnected.close(None).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let metrics = get_json(&app, "/metrics").await;
+    assert_eq!(metrics["websocket"]["active"], json!(0));
+    assert_eq!(metrics["websocket"]["connections"], json!(2));
     server.abort();
 }
 
