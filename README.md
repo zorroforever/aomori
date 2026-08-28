@@ -51,8 +51,19 @@ Lua command 可以通过受限 Host API 创建实体、修改自己拥有的实�
 ## 运行
 
 ```bash
-cargo test
-cd web && npm run test:e2e
+source "$HOME/.cargo/env"
+cargo fmt --all -- --check
+cargo test --locked
+cargo check --locked
+cargo clippy --locked --all-targets -- -D warnings
+cd web && npm ci && npm run build && npm run test:e2e
+```
+
+GitHub Actions 会在 push 到 `main` 和 pull request 时分别执行 Rust quality、Web build、Web E2E 和 Docker smoke。具备 Docker daemon 权限的本地环境可额外运行 `./scripts/docker-smoke.sh`，验证非 root、只读根文件系统、capability 删除以及数据卷跨容器恢复。
+
+启动本地节点：
+
+```bash
 cargo run -- --listen 127.0.0.1:8091 --allow-unsigned-commands
 ```
 

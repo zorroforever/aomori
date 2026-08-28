@@ -23,17 +23,12 @@ pub struct Entity {
     pub data: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ContractStatus {
+    #[default]
     Published,
     Deprecated,
-}
-
-impl Default for ContractStatus {
-    fn default() -> Self {
-        Self::Published
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

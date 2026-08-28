@@ -174,15 +174,12 @@ pub fn ensure_current(state: &mut WorldState) -> Result<bool> {
     }
     for (actor_id, status) in legacy_progress {
         let key = format!("{actor_id}:lost_key");
-        if !state.quest_progress.contains_key(&key) {
-            state.quest_progress.insert(
-                key,
-                crate::model::QuestProgress {
-                    quest_id: "lost_key".into(),
-                    actor_id,
-                    status,
-                },
-            );
+        if let std::collections::btree_map::Entry::Vacant(entry) = state.quest_progress.entry(key) {
+            entry.insert(crate::model::QuestProgress {
+                quest_id: "lost_key".into(),
+                actor_id,
+                status,
+            });
             changed = true;
         }
     }

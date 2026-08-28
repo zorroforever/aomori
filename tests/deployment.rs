@@ -5,6 +5,7 @@ const ENVIRONMENT: &str = include_str!("../deploy/systemd/aomori.env.example");
 const DOCKERFILE: &str = include_str!("../Dockerfile");
 const COMPOSE: &str = include_str!("../compose.yaml");
 const DOCKER_SMOKE: &str = include_str!("../scripts/docker-smoke.sh");
+const CI: &str = include_str!("../.github/workflows/ci.yml");
 
 #[test]
 fn systemd_service_keeps_runtime_and_secret_boundaries() {
@@ -113,6 +114,28 @@ fn docker_smoke_covers_runtime_identity_storage_and_restart() {
             "missing smoke check: {required}"
         );
     }
+}
+
+#[test]
+fn ci_runs_quality_web_e2e_and_container_checks_with_minimal_permissions() {
+    for required in [
+        "permissions:\n  contents: read",
+        "name: Rust quality",
+        "cargo test --locked",
+        "cargo clippy --locked --all-targets -- -D warnings",
+        "name: Web build",
+        "npm ci",
+        "npm run build",
+        "name: Web E2E",
+        "playwright install --with-deps chromium",
+        "actions/upload-artifact@v4",
+        "name: Docker smoke",
+        "./scripts/docker-smoke.sh",
+    ] {
+        assert!(CI.contains(required), "missing CI contract: {required}");
+    }
+    assert!(!CI.contains("AOMORI_ADMIN_TOKEN"));
+    assert!(!CI.contains("permissions: write-all"));
 }
 
 fn service_directives(contents: &str) -> BTreeMap<&str, &str> {

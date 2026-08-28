@@ -289,7 +289,7 @@ mod tests {
         .unwrap();
 
         let world = load_world(&store, true).unwrap();
-        assert!(world.entities[&4].data.get("inventory").is_none());
+        assert!(!world.entities[&4].data.contains_key("inventory"));
         assert_eq!(world.inventories[&4], vec![5]);
         assert_eq!(world.entities[&5].location, Some(4));
         assert_ne!(world.quests["lost_key"].giver_entity_id, 0);
