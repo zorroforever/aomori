@@ -86,23 +86,27 @@ async function unlockIdentity() {
   const storageName = keyStorageName(state.account);
   const stored = localStorage.getItem(storageName);
   if (!stored) throw new Error('当前账户没有本地身份');
-  let secretKey: Uint8Array;
-  if (/^[0-9a-f]{128}$/i.test(stored)) {
-    secretKey = hexToBytes(stored);
-    const migrationPassword = password('检测到旧版明文私钥，请设置本地身份密码（至少 8 个字符）');
-    localStorage.setItem(storageName, JSON.stringify(encryptedIdentity(state.account, secretKey, migrationPassword)));
-    addLog('旧版明文私钥已迁移为加密存储', 'system');
-  } else {
-    const backup = JSON.parse(stored) as IdentityBackup;
-    if (backup.account !== state.account) throw new Error('本地身份账户不匹配');
-    secretKey = decryptIdentity(backup, password('输入本地身份密码'));
+  let secretKey: Uint8Array | null = null;
+  try {
+    if (/^[0-9a-f]{128}$/i.test(stored)) {
+      secretKey = hexToBytes(stored);
+      const migrationPassword = password('检测到旧版明文私钥，请设置本地身份密码（至少 8 个字符）');
+      localStorage.setItem(storageName, JSON.stringify(encryptedIdentity(state.account, secretKey, migrationPassword)));
+      addLog('旧版明文私钥已迁移为加密存储', 'system');
+    } else {
+      const backup = JSON.parse(stored) as IdentityBackup;
+      if (backup.account !== state.account) throw new Error('本地身份账户不匹配');
+      secretKey = decryptIdentity(backup, password('输入本地身份密码'));
+    }
+    const account = await rpc('aomori_get_account', { name: state.account });
+    if (!account || account.public_key?.toLowerCase() !== bytesToHex(secretKey.slice(32))) {
+      throw new Error('节点账户与本地身份公钥不匹配');
+    }
+    state.secretKey = secretKey;
+  } catch (error) {
+    secretKey?.fill(0);
+    throw error;
   }
-  const account = await rpc('aomori_get_account', { name: state.account });
-  if (!account || account.public_key?.toLowerCase() !== bytesToHex(secretKey.slice(32))) {
-    secretKey.fill(0);
-    throw new Error('节点账户与本地身份公钥不匹配');
-  }
-  state.secretKey = secretKey;
   setIdentityUi(true);
   addLog(`已解锁 ${state.account}，私钥仅保留在当前页面内存`, 'system');
 }
@@ -121,18 +125,22 @@ async function importIdentity(file: File) {
   const backup = JSON.parse(await file.text()) as IdentityBackup;
   validateBackup(backup);
   const secretKey = decryptIdentity(backup, password('输入身份备份密码'));
-  selectRpc(($('rpcInput') as HTMLInputElement).value);
-  const account = await rpc('aomori_get_account', { name: backup.account });
-  if (!account || account.public_key?.toLowerCase() !== backup.publicKey.toLowerCase()) {
-    secretKey.fill(0);
-    throw new Error('节点账户与备份公钥不匹配');
+  try {
+    selectRpc(($('rpcInput') as HTMLInputElement).value);
+    const account = await rpc('aomori_get_account', { name: backup.account });
+    if (!account || account.public_key?.toLowerCase() !== backup.publicKey.toLowerCase()) {
+      throw new Error('节点账户与备份公钥不匹配');
+    }
+    localStorage.setItem(keyStorageName(backup.account), JSON.stringify(backup));
+    clearSecretKey();
+    state.account = backup.account;
+    state.secretKey = secretKey;
+    setIdentityUi(true);
+    addLog(`已导入 ${backup.account} 的签名身份`, 'system');
+  } catch (error) {
+    if (state.secretKey !== secretKey) secretKey.fill(0);
+    throw error;
   }
-  localStorage.setItem(keyStorageName(backup.account), JSON.stringify(backup));
-  clearSecretKey();
-  state.account = backup.account;
-  state.secretKey = secretKey;
-  setIdentityUi(true);
-  addLog(`已导入 ${backup.account} 的签名身份`, 'system');
 }
 function transactionBytes(tx: any) { return new TextEncoder().encode(JSON.stringify({ from: tx.from, nonce: tx.nonce, entity_id: tx.entity_id, action: tx.action, args: tx.args, signature: null })); }
 const readMethods = new Set(['aomori_get_info', 'aomori_get_account', 'aomori_get_entity', 'aomori_list_entities', 'aomori_get_quests', 'aomori_get_events', 'aomori_query']);

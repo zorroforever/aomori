@@ -68,6 +68,42 @@ test('keeps the identity locked when the node public key does not match', async 
   await expect(page.locator('#log')).toContainText('签名身份已锁定，请先解锁本地身份');
 });
 
+test('can retry identity import after node validation fails', async ({ page }) => {
+  const account = 'import-retry-player';
+  await createSignedIdentity(page, account);
+
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出加密备份' }).click();
+  const backupPath = await (await downloadPromise).path();
+  expect(backupPath).toBeTruthy();
+  await page.getByRole('button', { name: '删除本地身份' }).click();
+  await expect(page.locator('#writeMode')).toHaveText('开发 command');
+
+  let validationFailures = 0;
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_get_account' && request.params.name === account && validationFailures === 0) {
+      validationFailures++;
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  await page.locator('#importIdentityFile').setInputFiles(backupPath!);
+  await expect(page.locator('#log')).toContainText('无法连接节点，请检查节点地址或网络连接');
+  await expect(page.locator('#writeMode')).toHaveText('开发 command');
+  expect(validationFailures).toBe(1);
+
+  await page.unroute(rpcUrl);
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  await page.locator('#importIdentityFile').setInputFiles(backupPath!);
+  await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
+  await expect(page.locator('#log')).toContainText(`已导入 ${account} 的签名身份`);
+});
+
 test('refreshes the nonce and re-signs once after a nonce conflict', async ({ page }) => {
   const account = 'nonce-retry-player';
   await createSignedIdentity(page, account);
