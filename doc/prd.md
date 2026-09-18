@@ -1,5 +1,9 @@
 # Aomori 总体 PRD
 
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
+> 本文档当前以中文维护。
+
 ## 1. 产品定位
 
 Aomori 是面向 MUD/文字冒险世界的确定性自治世界引擎。Rust 负责账号、权限、资产、实体、事务和状态一致性；Lua 负责可迭代的世界规则、命令、任务和 NPC 行为。

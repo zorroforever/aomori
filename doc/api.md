@@ -1,5 +1,9 @@
 # Aomori RPC Protocol v1
 
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
+> This API reference is currently maintained in English.
+
 ## Transports
 
 - HTTP JSON-RPC: `POST /rpc` (maximum request body: 1 MiB)

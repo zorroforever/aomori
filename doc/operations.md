@@ -1,5 +1,9 @@
 # Aomori 单节点运行手册
 
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
+> 本运行手册当前以中文维护。
+
 ## 容器启动
 
 复制环境变量模板并生成管理凭据：

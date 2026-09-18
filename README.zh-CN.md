@@ -151,6 +151,7 @@ curl --fail http://127.0.0.1:8091/ready
 
 ## 文档
 
+- [文档索引](doc/README.zh-CN.md)
 - [API 文档](doc/api.md)
 - [运行手册](doc/operations.md)
 - [MVP 范围](doc/mvp.md)

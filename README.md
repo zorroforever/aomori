@@ -172,6 +172,7 @@ For host deployment, use [`deploy/systemd/aomori.service`](deploy/systemd/aomori
 
 ## Documentation
 
+- [Documentation index](doc/README.md)
 - [API reference](doc/api.md)
 - [Operations guide](doc/operations.md)
 - [MVP scope](doc/mvp.md)

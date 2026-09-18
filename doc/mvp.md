@@ -1,5 +1,9 @@
 # Aomori 单点 MVP 说明
 
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
+> 本文档当前以中文维护。
+
 ## 1. 范围
 
 本 MVP 是单进程、单节点、内存状态引擎，不代表完整区块链。它用于验证 Rust 状态机与 Lua 玩法层之间的边界。

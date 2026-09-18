@@ -145,6 +145,7 @@ curl --fail http://127.0.0.1:8091/ready
 
 ## ドキュメント
 
+- [ドキュメント一覧](doc/README.ja.md)
 - [API リファレンス](doc/api.md)
 - [運用ガイド](doc/operations.md)
 - [MVP スコープ](doc/mvp.md)
