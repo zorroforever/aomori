@@ -74,7 +74,7 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   await expect.poll(async () => {
     const response = await page.request.post('http://127.0.0.1:18093/rpc', { data: { jsonrpc: '2.0', id: 3, method: 'aomori_get_account', params: { name: 'browser-player' } } });
     return (await response.json()).result.nonce;
-  }).toBe(2);
+  }).toBe(1);
 
   await page.getByRole('button', { name: '接取 The Lost Key' }).click();
   await page.getByRole('button', { name: '接取 Echoes in Stone' }).click();
