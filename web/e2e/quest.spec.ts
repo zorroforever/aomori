@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('completes the lost key quest through the UI', async ({ page }) => {
+  const account = `browser-player-${Date.now()}`;
   let limitedRead = true;
   await page.route('http://127.0.0.1:18093/rpc', async route => {
     const request = route.request().postDataJSON();
@@ -23,13 +24,15 @@ test('completes the lost key quest through the UI', async ({ page }) => {
     } else await route.continue();
   });
   await expect(page.locator('#rpcInput')).toHaveValue('http://127.0.0.1:18093');
-  await page.locator('#accountInput').fill('browser-player');
+  await page.locator('#accountInput').fill(account);
   await page.locator('#adminTokenInput').fill('e2e-admin-token');
   page.once('dialog', dialog => dialog.accept('local-password'));
   await page.getByRole('button', { name: '创建签名身份' }).click();
   await expect(page.locator('#log')).toContainText('请求过于频繁，请在 25 毫秒后重试');
   expect(limitedWrites).toBe(1);
   await page.unroute('http://127.0.0.1:18093/rpc');
+  await expect(page.getByRole('button', { name: '创建签名身份' })).toBeEnabled();
+  await page.locator('#adminTokenInput').fill('e2e-admin-token');
   page.once('dialog', dialog => dialog.accept('local-password'));
   await page.getByRole('button', { name: '创建签名身份' }).click();
 
@@ -73,7 +76,7 @@ test('completes the lost key quest through the UI', async ({ page }) => {
 
   await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
   await expect.poll(async () => {
-    const response = await page.request.post('http://127.0.0.1:18093/rpc', { data: { jsonrpc: '2.0', id: 3, method: 'aomori_get_account', params: { name: 'browser-player' } } });
+    const response = await page.request.post('http://127.0.0.1:18093/rpc', { data: { jsonrpc: '2.0', id: 3, method: 'aomori_get_account', params: { name: account } } });
     return (await response.json()).result.nonce;
   }).toBe(1);
 

@@ -12,7 +12,7 @@ const IDENTITY_ITERATIONS = 210_000;
 const RPC_TIMEOUT_MS = 5_000;
 
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
-const state = { rpc: defaultRpc, actor: 4, account: '', secretKey: null as Uint8Array | null, lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, roomActors: [] as any[], quests: [] as any[] };
+const state = { rpc: defaultRpc, actor: 4, account: '', secretKey: null as Uint8Array | null, lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
 app.innerHTML = `
@@ -43,6 +43,18 @@ function setCommandBusy(busy: boolean) {
   ($('commandForm').querySelector('button') as HTMLButtonElement).disabled = busy;
   ($('lookBtn') as HTMLButtonElement).disabled = busy;
   syncCommandControls();
+  setIdentityBusy(state.identityBusy);
+}
+function setIdentityBusy(busy: boolean) {
+  state.identityBusy = busy;
+  ['createIdentityBtn', 'unlockIdentityBtn', 'lockIdentityBtn', 'exportIdentityBtn', 'importIdentityBtn', 'forgetIdentityBtn', 'importIdentityFile'].forEach(id => { ($(id) as HTMLButtonElement | HTMLInputElement).disabled = busy || state.commanding; });
+}
+async function identityOperation<T>(operation: () => Promise<T> | T) {
+  if (state.identityBusy || state.commanding || state.connecting) return;
+  setIdentityBusy(true);
+  try { return await operation(); }
+  catch (error) { addLog((error as Error).message, 'error'); }
+  finally { setIdentityBusy(false); }
 }
 function addLog(text: string, type = '') { const row = document.createElement('div'); row.className = `log-row ${type}`; row.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><span>${escapeHtml(text)}</span>`; log.append(row); log.scrollTop = log.scrollHeight; }
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]!)); }
@@ -72,7 +84,9 @@ function encryptedIdentity(account: string, secretKey: Uint8Array, identityPassw
   const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
   return { format: 'aomori-ed25519-backup', version: 1, account, publicKey: bytesToHex(secretKey.slice(32)), salt: bytesToHex(salt), nonce: bytesToHex(nonce), ciphertext: bytesToHex(nacl.secretbox(secretKey, nonce, deriveBackupKey(identityPassword, salt, IDENTITY_ITERATIONS))), iterations: IDENTITY_ITERATIONS };
 }
-function validateBackup(backup: IdentityBackup) { if (backup.format !== 'aomori-ed25519-backup' || backup.version !== 1 || !backup.account || backup.iterations < 100_000) throw new Error('不支持的身份备份格式'); }
+function validateBackup(backup: IdentityBackup) {
+  if (!backup || typeof backup !== 'object' || backup.format !== 'aomori-ed25519-backup' || backup.version !== 1 || typeof backup.account !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(backup.account) || typeof backup.publicKey !== 'string' || !/^[0-9a-f]{64}$/i.test(backup.publicKey) || typeof backup.salt !== 'string' || !/^[0-9a-f]{32}$/i.test(backup.salt) || typeof backup.nonce !== 'string' || backup.nonce.length !== nacl.secretbox.nonceLength * 2 || !/^[0-9a-f]+$/i.test(backup.nonce) || typeof backup.ciphertext !== 'string' || backup.ciphertext.length < 32 || backup.ciphertext.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(backup.ciphertext) || !Number.isSafeInteger(backup.iterations) || backup.iterations < 100_000 || backup.iterations > 1_000_000) throw new Error('不支持的身份备份格式');
+}
 function decryptIdentity(backup: IdentityBackup, identityPassword: string) {
   validateBackup(backup);
   const secretKey = nacl.secretbox.open(hexToBytes(backup.ciphertext), hexToBytes(backup.nonce), deriveBackupKey(identityPassword, hexToBytes(backup.salt), backup.iterations));
@@ -145,6 +159,7 @@ async function importIdentity(file: File) {
 function transactionBytes(tx: any) { return new TextEncoder().encode(JSON.stringify({ from: tx.from, nonce: tx.nonce, entity_id: tx.entity_id, action: tx.action, args: tx.args, signature: null })); }
 const readMethods = new Set(['aomori_get_info', 'aomori_get_account', 'aomori_get_entity', 'aomori_list_entities', 'aomori_get_quests', 'aomori_get_events', 'aomori_query']);
 class RpcError extends Error { constructor(message: string, readonly code?: number, readonly data?: Record<string, unknown>) { super(message); this.name = 'RpcError'; } }
+class TransactionOutcomeUnknown extends Error { constructor(message: string) { super(`交易结果未知，请查询节点账户和事件后再决定是否重试: ${message}`); } }
 function wait(ms: number) { return new Promise(resolve => window.setTimeout(resolve, ms)); }
 async function rpc(method: string, params: object, adminToken?: string) {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
@@ -185,6 +200,12 @@ async function rpc(method: string, params: object, adminToken?: string) {
   throw new RpcError('RPC retry exhausted');
 }
 function updateReceipt(receipt: any) { $('receipt').innerHTML = `<div class="receipt-row"><span>状态</span><strong class="${receipt.ok ? 'ok' : 'bad'}">${receipt.ok ? 'SUCCESS' : 'FAILED'}</strong></div><div class="receipt-row"><span>交易</span><code>${escapeHtml(receipt.tx_id || 'query')}</code></div><div class="receipt-row"><span>state root</span><code>${escapeHtml(receipt.state_root || '-')}</code></div>`; }
+function handleCommandError(error: unknown) {
+  const uncertain = error instanceof TransactionOutcomeUnknown;
+  $('receipt').innerHTML = `<div class="receipt-row"><span>状态</span><strong class="${uncertain ? '' : 'bad'}">${uncertain ? 'UNKNOWN' : 'FAILED'}</strong></div><div class="receipt-row"><span>交易</span><code>-</code></div>`;
+  addLog((error as Error).message, 'error');
+}
+function dispatchCommand(raw: string) { if (!state.commanding && !state.identityBusy) command(raw).catch(handleCommandError); }
 function renderEvent(event: WorldEvent) { if (state.seenEvents.has(event.id)) return; state.seenEvents.add(event.id); const list = $('eventList'); if (list.querySelector('.muted')) list.innerHTML = ''; const row = document.createElement('div'); row.className = 'event'; row.innerHTML = `<div><span class="event-kind">${escapeHtml(event.kind)}</span><span class="event-id">#${event.id}</span></div><p>${escapeHtml(JSON.stringify(event.data))}</p>`; list.prepend(row); $('eventCount').textContent = String(state.seenEvents.size); if (event.id > state.lastEvent) storeEventCursor(event.id); }
 function isLagMessage(value: WorldEvent | EventStreamLagged): value is EventStreamLagged { return 'type' in value && value.type === 'event_stream_lagged'; }
 function parseEventMessage(payload: string): WorldEvent | EventStreamLagged {
@@ -214,12 +235,16 @@ async function submitCommand(action: string, args: Record<string, unknown>) {
     const tx = { from: state.account, nonce: account.nonce, entity_id: state.actor, action, args, signature: null as string | null };
     tx.signature = bytesToHex(nacl.sign.detached(transactionBytes(tx), state.secretKey));
     try { return await rpc('aomori_submit_transaction', tx); }
-    catch (error) { if (attempt === 0 && (error as Error).message.startsWith('invalid nonce')) continue; throw error; }
+    catch (error) {
+      if (attempt === 0 && error instanceof RpcError && error.code === -32003) continue;
+      if (error instanceof RpcError && error.code === undefined) throw new TransactionOutcomeUnknown(error.message);
+      throw error;
+    }
   }
   throw new Error('签名交易重试失败');
 }
 async function command(raw: string) {
-  if (state.commanding) return;
+  if (state.commanding || state.identityBusy) return;
   setCommandBusy(true);
   try {
     const parts = raw.trim().split(/\s+/);
@@ -255,38 +280,46 @@ async function command(raw: string) {
     setCommandBusy(false);
   }
 }
-async function connect() { if (state.connecting) return; state.connecting = true; const connectButton = $('connectBtn') as HTMLButtonElement; connectButton.disabled = true; setStatus('connecting', '连接中'); selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const owner = actor?.owner || ''; if (!state.secretKey || state.account !== owner) loadIdentity(owner); setStatus('online', '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshStatus(); await look(); } catch (error) { setStatus('offline', '连接失败'); addLog((error as Error).message, 'error'); } finally { state.connecting = false; connectButton.disabled = false; } }
+async function connect() { if (state.connecting || (state.identityBusy && !state.account) || state.commanding) return; state.connecting = true; const connectButton = $('connectBtn') as HTMLButtonElement; connectButton.disabled = true; setStatus('connecting', '连接中'); selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const owner = actor?.owner || ''; if (!state.secretKey || state.account !== owner) loadIdentity(owner); setStatus('online', '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshStatus(); await look(); } catch (error) { setStatus('offline', '连接失败'); addLog((error as Error).message, 'error'); } finally { state.connecting = false; connectButton.disabled = false; } }
 async function createIdentity() {
   selectRpc(($('rpcInput') as HTMLInputElement).value);
   const account = ($('accountInput') as HTMLInputElement).value.trim();
-  const adminToken = ($('adminTokenInput') as HTMLInputElement).value;
+  const adminInput = $('adminTokenInput') as HTMLInputElement;
+  const adminToken = adminInput.value;
   if (!account || !adminToken) throw new Error('账户名和管理员 Token 必填');
-  const identityPassword = password('设置本地身份密码（至少 8 个字符，刷新页面后需重新解锁）');
-  const keys = nacl.sign.keyPair();
-  await rpc('aomori_create_account', { name: account, public_key: bytesToHex(keys.publicKey), balance: 0 }, adminToken);
-  const created = await rpc('aomori_create_entity', { kind: 'actor', owner: account, contract: 'demo', location: 1, data: { name: account } }, adminToken);
-  localStorage.setItem(keyStorageName(account), JSON.stringify(encryptedIdentity(account, keys.secretKey, identityPassword)));
-  clearSecretKey();
-  state.account = account;
-  state.secretKey = keys.secretKey;
-  ($('adminTokenInput') as HTMLInputElement).value = '';
-  ($('actorInput') as HTMLInputElement).value = String(created.entity_id);
-  state.actor = created.entity_id;
-  setIdentityUi(true);
-  addLog(`已创建签名身份 ${account}，Actor #${state.actor}`, 'system');
-  await connect();
+  let keys: nacl.SignKeyPair | null = null;
+  let retained = false;
+  try {
+    const identityPassword = password('设置本地身份密码（至少 8 个字符，刷新页面后需重新解锁）');
+    keys = nacl.sign.keyPair();
+    await rpc('aomori_create_account', { name: account, public_key: bytesToHex(keys.publicKey), balance: 0 }, adminToken);
+    const created = await rpc('aomori_create_entity', { kind: 'actor', owner: account, contract: 'demo', location: 1, data: { name: account } }, adminToken);
+    localStorage.setItem(keyStorageName(account), JSON.stringify(encryptedIdentity(account, keys!.secretKey, identityPassword)));
+    clearSecretKey();
+    state.account = account;
+    state.secretKey = keys!.secretKey;
+    retained = true;
+    ($('actorInput') as HTMLInputElement).value = String(created.entity_id);
+    state.actor = created.entity_id;
+    setIdentityUi(true);
+    addLog(`已创建签名身份 ${account}，Actor #${state.actor}`, 'system');
+    await connect();
+  } finally {
+    adminInput.value = '';
+    if (!retained) keys?.secretKey.fill(0);
+  }
 }
-$('connectBtn').onclick = connect;
-$('createIdentityBtn').onclick = () => createIdentity().catch(error => addLog(error.message, 'error'));
-$('unlockIdentityBtn').onclick = () => unlockIdentity().catch(error => addLog(error.message, 'error'));
-$('lockIdentityBtn').onclick = () => lockIdentity('签名身份已锁定，内存私钥已清除');
-$('exportIdentityBtn').onclick = () => { try { exportIdentity(); } catch (error) { addLog((error as Error).message, 'error'); } };
-$('importIdentityBtn').onclick = () => ($('importIdentityFile') as HTMLInputElement).click();
-$('importIdentityFile').addEventListener('change', event => { const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (file) importIdentity(file).catch(error => addLog(error.message, 'error')).finally(() => { input.value = ''; }); });
-$('forgetIdentityBtn').onclick = () => { if (state.account) localStorage.removeItem(keyStorageName(state.account)); clearSecretKey(); setIdentityUi(false); addLog('已删除当前账户的本地加密身份', 'system'); };
-$('lookBtn').onclick = () => command('look').catch(error => addLog(error.message, 'error')); const commandInput = $('commandInput') as HTMLInputElement; commandInput.addEventListener('keydown', event => { if (event.key === 'ArrowUp') { event.preventDefault(); state.historyIndex = Math.max(0, state.historyIndex - 1); commandInput.value = state.history[state.historyIndex] || ''; } if (event.key === 'ArrowDown') { event.preventDefault(); state.historyIndex = Math.min(state.history.length, state.historyIndex + 1); commandInput.value = state.history[state.historyIndex] || ''; } }); $('commandForm').addEventListener('submit', event => { event.preventDefault(); const input = $('commandInput') as HTMLInputElement; const value = input.value.trim(); if (!value) return; state.history = [...state.history.filter(item => item !== value), value].slice(-50); state.historyIndex = state.history.length; addLog(`> ${value}`, 'command'); input.value = ''; command(value).catch(error => addLog(error.message, 'error')); }); $('exits').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-direction]'); if (button) command(`go ${button.dataset.direction}`).catch(error => addLog(error.message, 'error')); });
-$('roomEntities').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) command(button.dataset.command || '').catch(error => addLog(error.message, 'error')); });
-$('inventory').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) command(button.dataset.command || '').catch(error => addLog(error.message, 'error')); });
-$('inventory').addEventListener('change', event => { const select = (event.target as HTMLElement).closest<HTMLSelectElement>('.transfer-target'); if (select?.value) command(`give ${select.dataset.itemId} ${select.value}`).catch(error => addLog(error.message, 'error')); });
-$('questList').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) command(button.dataset.command || '').catch(error => addLog(error.message, 'error')); });
+$('connectBtn').onclick = () => { if (!state.identityBusy && !state.commanding) connect(); };
+$('createIdentityBtn').onclick = () => identityOperation(createIdentity);
+$('unlockIdentityBtn').onclick = () => identityOperation(unlockIdentity);
+$('lockIdentityBtn').onclick = () => identityOperation(() => lockIdentity('签名身份已锁定，内存私钥已清除'));
+$('exportIdentityBtn').onclick = () => identityOperation(exportIdentity);
+$('importIdentityBtn').onclick = () => { if (!state.identityBusy) ($('importIdentityFile') as HTMLInputElement).click(); };
+$('importIdentityFile').addEventListener('change', event => { const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (file) identityOperation(() => importIdentity(file)).finally(() => { input.value = ''; }); });
+$('forgetIdentityBtn').onclick = () => identityOperation(() => { if (state.account) localStorage.removeItem(keyStorageName(state.account)); clearSecretKey(); setIdentityUi(false); addLog('已删除当前账户的本地加密身份', 'system'); });
+$('lookBtn').onclick = () => dispatchCommand('look'); const commandInput = $('commandInput') as HTMLInputElement; commandInput.addEventListener('keydown', event => { if (event.key === 'ArrowUp') { event.preventDefault(); state.historyIndex = Math.max(0, state.historyIndex - 1); commandInput.value = state.history[state.historyIndex] || ''; } if (event.key === 'ArrowDown') { event.preventDefault(); state.historyIndex = Math.min(state.history.length, state.historyIndex + 1); commandInput.value = state.history[state.historyIndex] || ''; } }); $('commandForm').addEventListener('submit', event => { event.preventDefault(); const input = $('commandInput') as HTMLInputElement; const value = input.value.trim(); if (!value) return; state.history = [...state.history.filter(item => item !== value), value].slice(-50); state.historyIndex = state.history.length; addLog(`> ${value}`, 'command'); input.value = ''; dispatchCommand(value); }); $('exits').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-direction]'); if (button) dispatchCommand(`go ${button.dataset.direction}`); });
+$('roomEntities').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) dispatchCommand(button.dataset.command || ''); });
+$('inventory').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) dispatchCommand(button.dataset.command || ''); });
+$('inventory').addEventListener('change', event => { const select = (event.target as HTMLElement).closest<HTMLSelectElement>('.transfer-target'); if (select?.value) dispatchCommand(`give ${select.dataset.itemId} ${select.value}`); });
+$('questList').addEventListener('click', event => { const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command]'); if (button) dispatchCommand(button.dataset.command || ''); });
 addLog('输入节点地址与 Actor ID 后连接', 'system');

@@ -5,6 +5,8 @@ test('ignores duplicate command submissions while a command is pending', async (
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#statusText')).toHaveText('节点在线');
 
+  await expect(page.locator('#roomEntities')).toContainText('Mira');
+
   let lookRequests = 0;
   let releaseLook!: () => void;
   const lookRelease = new Promise<void>(resolve => { releaseLook = resolve; });

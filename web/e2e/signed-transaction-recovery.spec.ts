@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const rpcUrl = 'http://127.0.0.1:18093/rpc';
+test.describe.configure({ mode: 'serial' });
 
 async function createSignedIdentity(page: Page, account: string) {
   await page.goto('/');
@@ -11,8 +12,37 @@ async function createSignedIdentity(page: Page, account: string) {
   page.once('dialog', dialog => dialog.accept('local-password'));
   await page.getByRole('button', { name: '创建签名身份' }).click();
   await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
+  await expect(page.getByRole('button', { name: '创建签名身份' })).toBeEnabled();
   await expect(page.locator('#roomEntities')).toContainText('Mira');
 }
+
+test('prevents duplicate identity creation while the request is pending', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#statusText')).toHaveText('节点在线');
+  let accountRequests = 0;
+  let releaseAccount!: () => void;
+  const accountRelease = new Promise<void>(resolve => { releaseAccount = resolve; });
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_create_account') {
+      accountRequests++;
+      await accountRelease;
+    }
+    await route.continue();
+  });
+  const account = `duplicate-identity-${Date.now()}`;
+  await page.locator('#accountInput').fill(account);
+  await page.locator('#adminTokenInput').fill('e2e-admin-token');
+  page.once('dialog', dialog => dialog.accept('local-password'));
+  await page.getByRole('button', { name: '创建签名身份' }).click();
+  await expect.poll(() => accountRequests).toBe(1);
+  await expect(page.getByRole('button', { name: '创建签名身份' })).toBeDisabled();
+  await page.getByRole('button', { name: '创建签名身份' }).click();
+  expect(accountRequests).toBe(1);
+  releaseAccount();
+  await expect(page.getByRole('button', { name: '创建签名身份' })).toBeEnabled();
+});
 
 test('recovers controls after a signed transaction network failure', async ({ page }) => {
   const account = 'network-recovery-player';
@@ -123,7 +153,7 @@ test('refreshes the nonce and re-signs once after a nonce conflict', async ({ pa
       transactions.push({ nonce: request.params.nonce, signature: request.params.signature });
       if (transactions.length === 1) {
         conflictReturned = true;
-        await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, error: { code: -32001, message: 'invalid nonce: expected 1, got 0' } } });
+        await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, error: { code: -32003, message: 'invalid nonce: expected 1, got 0' } } });
       } else {
         await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { ok: true, tx_id: 'nonce-retry', state_root: 'test-root', messages: ['nonce retry accepted'] } } });
       }
@@ -139,4 +169,31 @@ test('refreshes the nonce and re-signs once after a nonce conflict', async ({ pa
   expect(transactions.map(transaction => transaction.nonce)).toEqual([0, 1]);
   expect(transactions[0].signature).not.toBe(transactions[1].signature);
   await expect(page.locator('#commandInput')).toBeEnabled();
+});
+
+test('stops after two nonce conflicts and restores failed receipt state', async ({ page }) => {
+  const account = `nonce-conflict-${Date.now()}`;
+  await createSignedIdentity(page, account);
+  let submissions = 0;
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_submit_transaction') {
+      submissions++;
+      await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, error: { code: -32003, message: 'invalid nonce: expected 1, got 0' } } });
+      return;
+    }
+    await route.continue();
+  });
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect.poll(() => submissions).toBe(2);
+  await expect(page.locator('#receipt')).toContainText('FAILED');
+  await expect(page.locator('#commandInput')).toBeEnabled();
+});
+
+test('rejects malformed identity backups without changing identity state', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#importIdentityFile').setInputFiles({ name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ format: 'aomori-ed25519-backup', version: 1, account: 'bad account' })) });
+  await expect(page.locator('#log')).toContainText('不支持的身份备份格式');
+  await expect(page.locator('#writeMode')).toHaveText('开发 command');
+  await expect(page.locator('#unlockIdentityBtn')).toBeHidden();
 });
