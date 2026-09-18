@@ -98,7 +98,10 @@ async function unlockIdentity() {
     secretKey = decryptIdentity(backup, password('输入本地身份密码'));
   }
   const account = await rpc('aomori_get_account', { name: state.account });
-  if (!account || account.public_key?.toLowerCase() !== bytesToHex(secretKey.slice(32))) throw new Error('节点账户与本地身份公钥不匹配');
+  if (!account || account.public_key?.toLowerCase() !== bytesToHex(secretKey.slice(32))) {
+    secretKey.fill(0);
+    throw new Error('节点账户与本地身份公钥不匹配');
+  }
   state.secretKey = secretKey;
   setIdentityUi(true);
   addLog(`已解锁 ${state.account}，私钥仅保留在当前页面内存`, 'system');
@@ -120,7 +123,10 @@ async function importIdentity(file: File) {
   const secretKey = decryptIdentity(backup, password('输入身份备份密码'));
   selectRpc(($('rpcInput') as HTMLInputElement).value);
   const account = await rpc('aomori_get_account', { name: backup.account });
-  if (!account || account.public_key?.toLowerCase() !== backup.publicKey.toLowerCase()) throw new Error('节点账户与备份公钥不匹配');
+  if (!account || account.public_key?.toLowerCase() !== backup.publicKey.toLowerCase()) {
+    secretKey.fill(0);
+    throw new Error('节点账户与备份公钥不匹配');
+  }
   localStorage.setItem(keyStorageName(backup.account), JSON.stringify(backup));
   clearSecretKey();
   state.account = backup.account;

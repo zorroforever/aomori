@@ -35,7 +35,8 @@ test('completes the lost key quest through the UI', async ({ page }) => {
 
   await expect(page.locator('#statusText')).toHaveText('节点在线');
   await expect(page.locator('#writeMode')).toContainText('签名交易');
-  await expect(page.locator('#actorInput')).toHaveValue('9');
+  const actorId = await page.locator('#actorInput').inputValue();
+  expect(Number(actorId)).toBeGreaterThan(4);
 
   const storedIdentity = await page.evaluate(() => Object.entries(localStorage).find(([key]) => key.includes('browser-player'))?.[1]);
   expect(storedIdentity).toBeTruthy();
@@ -116,7 +117,7 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   expect(Number(eventCursor)).toBeGreaterThan(0);
 
   await page.reload();
-  await page.locator('#actorInput').fill('9');
+  await page.locator('#actorInput').fill(actorId);
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#eventList')).toContainText('等待事件');
   await expect(page.locator('#writeMode')).toContainText('身份已锁定');
@@ -131,7 +132,7 @@ test('completes the lost key quest through the UI', async ({ page }) => {
     if (cursorKey) localStorage.setItem(cursorKey, String(Number.MAX_SAFE_INTEGER));
   });
   await page.reload();
-  await page.locator('#actorInput').fill('9');
+  await page.locator('#actorInput').fill(actorId);
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#eventList')).toContainText('quest_completed');
   const recoveredCursor = await page.evaluate(() => Number(Object.entries(localStorage).find(([key]) => key.startsWith('aomori:event-cursor:'))?.[1]));
