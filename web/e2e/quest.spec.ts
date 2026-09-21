@@ -14,6 +14,8 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#statusText')).toHaveText('节点在线');
   expect(limitedRead).toBe(false);
+  await expect(page.getByRole('button', { name: '连接节点' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '创建签名身份' })).toBeEnabled();
   await page.unroute('http://127.0.0.1:18093/rpc');
 
   let limitedWrites = 0;
@@ -123,9 +125,11 @@ test('completes the lost key quest through the UI', async ({ page }) => {
   await page.locator('#actorInput').fill(actorId);
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#eventList')).toContainText('等待事件');
+  await expect(page.getByRole('button', { name: '连接节点' })).toBeEnabled();
   await expect(page.locator('#writeMode')).toContainText('身份已锁定');
   page.once('dialog', dialog => dialog.accept('backup-password'));
   await page.getByRole('button', { name: '解锁本地身份' }).click();
+  await expect(page.locator('#log')).toContainText('已解锁');
   await expect(page.locator('#writeMode')).toContainText('签名交易');
   await expect(page.locator('#questList')).toContainText('completed');
   await expect(page.locator('#balance')).toHaveText('20');

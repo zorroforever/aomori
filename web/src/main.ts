@@ -292,7 +292,7 @@ async function submitCommand(action: string, args: Record<string, unknown>) {
     if (!account) throw new Error(`账户不存在: ${state.account}`);
     const tx = { from: state.account, nonce: account.nonce, entity_id: state.actor, action, args, signature: null as string | null };
     tx.signature = bytesToHex(nacl.sign.detached(transactionBytes(tx), state.secretKey));
-    state.pendingTxId = bytesToHex(blake3(transactionBytes(tx)));
+    state.pendingTxId = bytesToHex(blake3(new TextEncoder().encode(JSON.stringify(tx))));
     try { return await rpc('aomori_submit_transaction', tx); }
     catch (error) {
       if (attempt === 0 && error instanceof RpcError && error.code === -32003) continue;

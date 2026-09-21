@@ -56,6 +56,7 @@ test('recovers controls after a signed transaction network failure', async ({ pa
       failedSubmissions++;
       await route.abort('failed');
     } else if (request.method === 'aomori_get_receipt') {
+      expect(request.params.tx_id).toMatch(/^[0-9a-f]{64}$/);
       await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { ok: true, tx_id: request.params.tx_id, state_root: 'reconciled-root', messages: ['查询到已提交交易'] } } });
     } else await route.continue();
   });
