@@ -132,6 +132,92 @@ test('keeps an unknown receipt retryable when the node has not indexed it yet', 
   expect(receiptQueries).toBe(2);
 });
 
+test('keeps an unknown receipt retryable after a receipt query failure', async ({ page }) => {
+  const account = `receipt-failure-${Date.now()}`;
+  await createSignedIdentity(page, account);
+  let receiptQueries = 0;
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_submit_transaction') {
+      await route.abort('failed');
+      return;
+    }
+    if (request.method === 'aomori_get_receipt') {
+      receiptQueries++;
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await page.getByRole('button', { name: '查询交易结果' }).click();
+  await expect(page.locator('#log')).toContainText('无法连接节点，请检查节点地址或网络连接');
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await expect(page.getByRole('button', { name: '查询交易结果' })).toBeEnabled();
+  expect(receiptQueries).toBe(1);
+});
+
+test('restores the receipt query button after a timeout', async ({ page }) => {
+  const account = `receipt-timeout-${Date.now()}`;
+  await createSignedIdentity(page, account);
+  let receiptQueries = 0;
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_submit_transaction') {
+      await route.abort('failed');
+      return;
+    }
+    if (request.method === 'aomori_get_receipt') {
+      receiptQueries++;
+      await new Promise(() => undefined);
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await page.getByRole('button', { name: '查询交易结果' }).click();
+  await expect(page.locator('#log')).toContainText('RPC 请求超时，请检查节点连接', { timeout: 10_000 });
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await expect(page.getByRole('button', { name: '查询交易结果' })).toBeEnabled();
+  expect(receiptQueries).toBe(1);
+});
+
+test('ignores duplicate receipt query clicks while the request is pending', async ({ page }) => {
+  const account = `receipt-duplicate-${Date.now()}`;
+  await createSignedIdentity(page, account);
+  let receiptQueries = 0;
+  let releaseReceipt!: () => void;
+  const receiptRelease = new Promise<void>(resolve => { releaseReceipt = resolve; });
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_submit_transaction') {
+      await route.abort('failed');
+      return;
+    }
+    if (request.method === 'aomori_get_receipt') {
+      receiptQueries++;
+      await receiptRelease;
+      await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { ok: true, tx_id: request.params.tx_id, state_root: 'duplicate-query-root' } } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  const queryButton = page.getByRole('button', { name: '查询交易结果' });
+  await queryButton.click();
+  await expect(queryButton).toBeDisabled();
+  await queryButton.evaluate(button => button.click());
+  expect(receiptQueries).toBe(1);
+  releaseReceipt();
+  await expect(page.locator('#receipt')).toContainText('SUCCESS');
+});
+
 test('discards an in-flight receipt query after switching RPC endpoints', async ({ page }) => {
   const account = `receipt-switch-${Date.now()}`;
   await createSignedIdentity(page, account);
