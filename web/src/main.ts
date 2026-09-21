@@ -193,6 +193,7 @@ async function importIdentity(file: File) {
 function transactionBytes(tx: any) { return new TextEncoder().encode(JSON.stringify({ from: tx.from, nonce: tx.nonce, entity_id: tx.entity_id, action: tx.action, args: tx.args, signature: null })); }
 const readMethods = new Set(['aomori_get_info', 'aomori_get_account', 'aomori_get_entity', 'aomori_list_entities', 'aomori_get_quests', 'aomori_get_events', 'aomori_query']);
 class RpcError extends Error { constructor(message: string, readonly code?: number, readonly data?: Record<string, unknown>) { super(message); this.name = 'RpcError'; } }
+class RpcTransportError extends RpcError { constructor(message: string) { super(message); this.name = 'RpcTransportError'; } }
 class StaleRpcResponse extends Error { constructor() { super('RPC endpoint changed'); this.name = 'StaleRpcResponse'; } }
 class TransactionOutcomeUnknown extends Error { constructor(message: string) { super(`交易结果未知，请查询节点账户和事件后再决定是否重试: ${message}`); } }
 function wait(ms: number) { return new Promise(resolve => window.setTimeout(resolve, ms)); }
@@ -208,8 +209,8 @@ async function rpc(method: string, params: object, adminToken?: string, targetRp
     try {
       response = await fetch(`${requestRpc}/rpc`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }), signal: controller.signal });
     } catch (error) {
-      if ((error as DOMException).name === 'AbortError') throw new RpcError('RPC 请求超时，请检查节点连接');
-      if (error instanceof TypeError) throw new RpcError('无法连接节点，请检查节点地址或网络连接');
+      if ((error as DOMException).name === 'AbortError') throw new RpcTransportError('RPC 请求超时，请检查节点连接');
+      if (error instanceof TypeError) throw new RpcTransportError('无法连接节点，请检查节点地址或网络连接');
       throw error;
     } finally {
       window.clearTimeout(timeout);
@@ -299,7 +300,7 @@ async function submitCommand(action: string, args: Record<string, unknown>) {
     try { return await rpc('aomori_submit_transaction', tx); }
     catch (error) {
       if (attempt === 0 && error instanceof RpcError && error.code === -32003) continue;
-      if (error instanceof RpcError && error.code === undefined) throw new TransactionOutcomeUnknown(error.message);
+      if (error instanceof RpcTransportError) throw new TransactionOutcomeUnknown(error.message);
       throw error;
     }
   }

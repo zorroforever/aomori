@@ -396,6 +396,26 @@ test('refreshes the nonce and re-signs once after a nonce conflict', async ({ pa
   await expect(page.locator('#commandInput')).toBeEnabled();
 });
 
+test('marks a deterministic HTTP submission error as failed', async ({ page }) => {
+  const account = `http-submit-error-${Date.now()}`;
+  await createSignedIdentity(page, account);
+  let submissions = 0;
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_submit_transaction') {
+      submissions++;
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: 'internal server error' } }) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect.poll(() => submissions).toBe(1);
+  await expect(page.locator('#receipt')).toContainText('FAILED');
+  await expect(page.locator('#receipt')).not.toContainText('UNKNOWN');
+  await expect(page.locator('#log')).toContainText('internal server error');
+});
+
 test('stops after two nonce conflicts and restores failed receipt state', async ({ page }) => {
   const account = `nonce-conflict-${Date.now()}`;
   await createSignedIdentity(page, account);
