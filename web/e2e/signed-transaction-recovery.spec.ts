@@ -36,6 +36,32 @@ test('restores a stored identity as locked after a browser refresh', async ({ pa
   await expect(page.locator('#receipt')).toContainText('SUCCESS');
 });
 
+test('switches between stored identities without retaining the previous private key', async ({ page }) => {
+  const firstAccount = `switch-first-${Date.now()}`;
+  const firstActorId = await createSignedIdentity(page, firstAccount);
+  const secondAccount = `switch-second-${Date.now()}`;
+  const secondActorId = await createSignedIdentity(page, secondAccount);
+
+  await page.locator('#actorInput').fill(String(firstActorId));
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.locator('#writeMode')).toContainText(`身份已锁定 · ${firstAccount}`);
+  await expect(page.getByRole('button', { name: '解锁本地身份' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '锁定当前会话' })).toBeHidden();
+
+  page.once('dialog', dialog => dialog.accept('local-password'));
+  await page.getByRole('button', { name: '解锁本地身份' }).click();
+  await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${firstAccount}`);
+
+  await page.locator('#actorInput').fill(String(secondActorId));
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.locator('#writeMode')).toContainText(`身份已锁定 · ${secondAccount}`);
+  await expect(page.getByRole('button', { name: '解锁本地身份' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '锁定当前会话' })).toBeHidden();
+  await expect(page.locator('#roomEntities')).toContainText('Mira');
+});
+
 test('prevents duplicate identity creation while the request is pending', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '连接节点' }).click();
