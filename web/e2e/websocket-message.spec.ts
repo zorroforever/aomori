@@ -49,6 +49,26 @@ test('keeps the event stream usable after compensation fails', async ({ page }) 
   await expect(page.locator('#statusText')).toHaveText('节点在线');
 });
 
+test('ignores out-of-order events without moving the event cursor backwards', async ({ page }) => {
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    const server = ws.connectToServer();
+    server.onMessage(() => undefined);
+    setTimeout(() => {
+      ws.send(JSON.stringify({ id: 910001, head: 910001, kind: 'ordered_event', data: { value: 'first' } }));
+      ws.send(JSON.stringify({ id: 910003, head: 910003, kind: 'latest_event', data: { value: 'third' } }));
+      ws.send(JSON.stringify({ id: 910002, head: 910002, kind: 'late_event', data: { value: 'second' } }));
+    }, 300);
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.locator('#eventList')).toContainText('ordered_event');
+  await expect(page.locator('#eventList')).toContainText('latest_event');
+  await expect(page.locator('#eventList')).not.toContainText('late_event');
+  await expect.poll(async () => page.evaluate(() => Number(Object.entries(localStorage).find(([key]) => key.startsWith('aomori:event-cursor:'))?.[1]))).toBe(910003);
+});
+
 test('reports malformed event stream messages without breaking the connection', async ({ page }) => {
   await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
     const server = ws.connectToServer();
