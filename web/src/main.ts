@@ -170,12 +170,15 @@ async function importIdentity(file: File) {
   const backup = JSON.parse(await file.text()) as IdentityBackup;
   validateBackup(backup);
   const secretKey = decryptIdentity(backup, password('输入身份备份密码'));
+  const targetRpc = ($('rpcInput') as HTMLInputElement).value.replace(/\/$/, '');
+  const validationGeneration = state.rpcGeneration;
   try {
-    selectRpc(($('rpcInput') as HTMLInputElement).value);
-    const account = await rpc('aomori_get_account', { name: backup.account });
+    const account = await rpc('aomori_get_account', { name: backup.account }, undefined, targetRpc);
     if (!account || account.public_key?.toLowerCase() !== backup.publicKey.toLowerCase()) {
       throw new Error('节点账户与备份公钥不匹配');
     }
+    if (validationGeneration !== state.rpcGeneration) throw new StaleRpcResponse();
+    selectRpc(targetRpc);
     localStorage.setItem(keyStorageName(backup.account), JSON.stringify(backup));
     clearSecretKey();
     state.account = backup.account;
@@ -193,9 +196,9 @@ class RpcError extends Error { constructor(message: string, readonly code?: numb
 class StaleRpcResponse extends Error { constructor() { super('RPC endpoint changed'); this.name = 'StaleRpcResponse'; } }
 class TransactionOutcomeUnknown extends Error { constructor(message: string) { super(`交易结果未知，请查询节点账户和事件后再决定是否重试: ${message}`); } }
 function wait(ms: number) { return new Promise(resolve => window.setTimeout(resolve, ms)); }
-async function rpc(method: string, params: object, adminToken?: string) {
-  const requestGeneration = state.rpcGeneration;
-  const requestRpc = state.rpc;
+async function rpc(method: string, params: object, adminToken?: string, targetRpc?: string) {
+  const requestGeneration = targetRpc === undefined ? state.rpcGeneration : -1;
+  const requestRpc = targetRpc ?? state.rpc;
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (adminToken) headers.authorization = `Bearer ${adminToken}`;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -211,7 +214,7 @@ async function rpc(method: string, params: object, adminToken?: string) {
     } finally {
       window.clearTimeout(timeout);
     }
-    if (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc) throw new StaleRpcResponse();
+    if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
     let body: RpcResult;
     try {
       body = await response.json();
@@ -225,7 +228,7 @@ async function rpc(method: string, params: object, adminToken?: string) {
       await wait(delay);
       continue;
     }
-    if (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc) throw new StaleRpcResponse();
+    if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
     if (body.error) {
       const message = body.error.code === -32004 && Number.isFinite(retryAfterMs) ? `请求过于频繁，请在 ${Math.ceil(retryAfterMs)} 毫秒后重试` : body.error.message;
       throw new RpcError(message, body.error.code, body.error.data);

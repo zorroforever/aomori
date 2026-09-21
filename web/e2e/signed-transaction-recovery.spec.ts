@@ -301,6 +301,28 @@ test('keeps the identity locked when the node public key does not match', async 
   await expect(page.locator('#log')).toContainText('签名身份已锁定，请先解锁本地身份');
 });
 
+test('keeps the active identity when importing from an unavailable node fails', async ({ page }) => {
+  const account = `import-preserve-${Date.now()}`;
+  await createSignedIdentity(page, account);
+
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出加密备份' }).click();
+  const backupPath = await (await downloadPromise).path();
+  expect(backupPath).toBeTruthy();
+
+  await page.route('http://127.0.0.1:18094/rpc', route => route.abort('failed'));
+  await page.locator('#rpcInput').fill('http://127.0.0.1:18094');
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  await page.locator('#importIdentityFile').setInputFiles(backupPath!);
+  await expect(page.locator('#log')).toContainText('无法连接节点，请检查节点地址或网络连接');
+  await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
+  await expect(page.getByRole('button', { name: '锁定当前会话' })).toBeVisible();
+
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('SUCCESS');
+});
+
 test('can retry identity import after node validation fails', async ({ page }) => {
   const account = 'import-retry-player';
   await createSignedIdentity(page, account);
