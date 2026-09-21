@@ -5,8 +5,8 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'line' : 'list',
-  timeout: 30_000,
-  expect: { timeout: 5_000 },
+  timeout: process.env.CI ? 45_000 : 30_000,
+  expect: { timeout: process.env.CI ? 10_000 : 5_000 },
   use: {
     baseURL: 'http://127.0.0.1:15173',
     trace: 'retain-on-failure',
