@@ -2,6 +2,7 @@ import './style.css';
 import nacl from 'tweetnacl';
 import { pbkdf2 } from '@noble/hashes/pbkdf2';
 import { sha256 } from '@noble/hashes/sha256';
+import { blake3 } from '@noble/hashes/blake3';
 
 type RpcResult = { result?: any; error?: { code: number; message: string; data?: { retry_after_ms?: number } } };
 type WorldEvent = { id: number; head: number; kind: string; entity_id?: number; data: Record<string, unknown> };
@@ -12,7 +13,7 @@ const IDENTITY_ITERATIONS = 210_000;
 const RPC_TIMEOUT_MS = 5_000;
 
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
-const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
+const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, pendingTxId: '', lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
 app.innerHTML = `
@@ -84,6 +85,7 @@ function selectRpc(rpcUrl: string) {
   $('inventory').innerHTML = '<span class="muted">暂无物品</span>';
   $('questList').innerHTML = '<span class="muted">暂无任务</span>';
   $('balance').textContent = '0';
+  state.pendingTxId = '';
   $('receipt').innerHTML = '<span class="muted">暂无交易</span>';
   $('eventCount').textContent = '0';
   $('eventList').innerHTML = '<span class="muted">等待事件...</span>';
@@ -233,11 +235,33 @@ async function rpc(method: string, params: object, adminToken?: string) {
   }
   throw new RpcError('RPC retry exhausted');
 }
-function updateReceipt(receipt: any) { $('receipt').innerHTML = `<div class="receipt-row"><span>状态</span><strong class="${receipt.ok ? 'ok' : 'bad'}">${receipt.ok ? 'SUCCESS' : 'FAILED'}</strong></div><div class="receipt-row"><span>交易</span><code>${escapeHtml(receipt.tx_id || 'query')}</code></div><div class="receipt-row"><span>state root</span><code>${escapeHtml(receipt.state_root || '-')}</code></div>`; }
+function updateReceipt(receipt: any) {
+  state.pendingTxId = '';
+  $('receipt').innerHTML = `<div class="receipt-row"><span>状态</span><strong class="${receipt.ok ? 'ok' : 'bad'}">${receipt.ok ? 'SUCCESS' : 'FAILED'}</strong></div><div class="receipt-row"><span>交易</span><code>${escapeHtml(receipt.tx_id || 'query')}</code></div><div class="receipt-row"><span>state root</span><code>${escapeHtml(receipt.state_root || '-')}</code></div>`;
+}
+function renderUnknownReceipt(txId: string) {
+  state.pendingTxId = txId;
+  $('receipt').innerHTML = `<div class="receipt-row"><span>状态</span><strong>UNKNOWN</strong></div><div class="receipt-row"><span>交易</span><code>${escapeHtml(txId)}</code></div><button id="queryReceiptBtn" class="text-button">查询交易结果</button>`;
+  $('queryReceiptBtn').onclick = () => queryPendingReceipt();
+}
+async function queryPendingReceipt() {
+  if (!state.pendingTxId) return;
+  const txId = state.pendingTxId;
+  const button = $('queryReceiptBtn') as HTMLButtonElement | null;
+  if (button) button.disabled = true;
+  try {
+    const receipt = await rpc('aomori_get_receipt', { tx_id: txId });
+    if (receipt) { updateReceipt(receipt); addLog('已查询到交易结果', 'system'); }
+    else { if (button) button.disabled = false; addLog('节点尚未返回该交易回执', 'error'); }
+  } catch (error) {
+    if (button) button.disabled = false;
+    addLog((error as Error).message, 'error');
+  }
+}
 function handleCommandError(error: unknown) {
-  const uncertain = error instanceof TransactionOutcomeUnknown;
-  $('receipt').innerHTML = `<div class="receipt-row"><span>状态</span><strong class="${uncertain ? '' : 'bad'}">${uncertain ? 'UNKNOWN' : 'FAILED'}</strong></div><div class="receipt-row"><span>交易</span><code>-</code></div>`;
-  addLog((error as Error).message, 'error');
+  if (error instanceof TransactionOutcomeUnknown && state.pendingTxId) renderUnknownReceipt(state.pendingTxId);
+  else if (error instanceof TransactionOutcomeUnknown) addLog(error.message, 'error');
+  else { $('receipt').innerHTML = '<div class="receipt-row"><span>状态</span><strong class="bad">FAILED</strong></div><div class="receipt-row"><span>交易</span><code>-</code></div>'; addLog((error as Error).message, 'error'); }
 }
 function dispatchCommand(raw: string) { if (!state.commanding && !state.identityBusy) command(raw).catch(handleCommandError); }
 function renderEvent(event: WorldEvent) { if (state.seenEvents.has(event.id)) return; state.seenEvents.add(event.id); const list = $('eventList'); if (list.querySelector('.muted')) list.innerHTML = ''; const row = document.createElement('div'); row.className = 'event'; row.innerHTML = `<div><span class="event-kind">${escapeHtml(event.kind)}</span><span class="event-id">#${event.id}</span></div><p>${escapeHtml(JSON.stringify(event.data))}</p>`; list.prepend(row); $('eventCount').textContent = String(state.seenEvents.size); if (event.id > state.lastEvent) storeEventCursor(event.id); }
@@ -268,6 +292,7 @@ async function submitCommand(action: string, args: Record<string, unknown>) {
     if (!account) throw new Error(`账户不存在: ${state.account}`);
     const tx = { from: state.account, nonce: account.nonce, entity_id: state.actor, action, args, signature: null as string | null };
     tx.signature = bytesToHex(nacl.sign.detached(transactionBytes(tx), state.secretKey));
+    state.pendingTxId = bytesToHex(blake3(transactionBytes(tx)));
     try { return await rpc('aomori_submit_transaction', tx); }
     catch (error) {
       if (attempt === 0 && error instanceof RpcError && error.code === -32003) continue;

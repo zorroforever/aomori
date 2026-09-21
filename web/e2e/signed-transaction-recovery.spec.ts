@@ -20,6 +20,7 @@ test('prevents duplicate identity creation while the request is pending', async 
   await page.goto('/');
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.getByRole('button', { name: '创建签名身份' })).toBeEnabled();
   let accountRequests = 0;
   let releaseAccount!: () => void;
   const accountRelease = new Promise<void>(resolve => { releaseAccount = resolve; });
@@ -54,12 +55,17 @@ test('recovers controls after a signed transaction network failure', async ({ pa
     if (request.method === 'aomori_submit_transaction') {
       failedSubmissions++;
       await route.abort('failed');
+    } else if (request.method === 'aomori_get_receipt') {
+      await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { ok: true, tx_id: request.params.tx_id, state_root: 'reconciled-root', messages: ['查询到已提交交易'] } } });
     } else await route.continue();
   });
 
   await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
-  await expect(page.locator('#log')).toContainText('无法连接节点，请检查节点地址或网络连接');
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await expect(page.getByRole('button', { name: '查询交易结果' })).toBeEnabled();
   expect(failedSubmissions).toBe(1);
+  await page.getByRole('button', { name: '查询交易结果' }).click();
+  await expect(page.locator('#receipt')).toContainText('SUCCESS');
   await expect(page.locator('#commandInput')).toBeEnabled();
   await expect(page.getByRole('button', { name: '查看' })).toBeEnabled();
   await expect(page.locator('#roomEntities').getByRole('button', { name: /Mira/ })).toBeEnabled();
