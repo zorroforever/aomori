@@ -60,14 +60,49 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
-      - run: npm run test:e2e
+      - name: Run Web E2E
+        id: web-e2e
+        continue-on-error: true
+        run: npm run test:e2e -- --reporter=json
         working-directory: web
-      - if: failure()
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/results.json
+      - name: Publish Web E2E summary
+        if: always()
+        run: |
+          if [ -f web/test-results/results.json ]; then
+            node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+            const fs = require('node:fs');
+            const report = JSON.parse(fs.readFileSync('web/test-results/results.json', 'utf8'));
+            const failed = [];
+            for (const suite of report.suites ?? []) {
+              for (const spec of suite.specs ?? []) {
+                for (const test of spec.tests ?? []) {
+                  for (const result of test.results ?? []) {
+                    if (result.status === 'failed' || result.status === 'timedOut') {
+                      failed.push({ title: spec.title, file: spec.file, status: result.status, error: result.error?.message ?? '' });
+                    }
+                  }
+                }
+              }
+            }
+            console.log(`## Web E2E\n\n- Expected: ${report.stats.expected}\n- Unexpected: ${report.stats.unexpected}\n- Flaky: ${report.stats.flaky}\n`);
+            if (failed.length) console.log('### Failures\n\n```json\n' + JSON.stringify(failed, null, 2) + '\n```');
+            NODE
+          else
+            echo '## Web E2E' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Playwright did not produce a JSON report.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload Web E2E report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: web/test-results/
           if-no-files-found: ignore
+      - name: Fail if Web E2E failed
+        if: steps.web-e2e.outcome == 'failure'
+        run: exit 1
 
   rpc-smoke:
     name: RPC smoke
