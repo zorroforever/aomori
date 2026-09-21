@@ -255,7 +255,7 @@ async function queryPendingReceipt() {
     else { if (button) button.disabled = false; addLog('节点尚未返回该交易回执', 'error'); }
   } catch (error) {
     if (button) button.disabled = false;
-    addLog((error as Error).message, 'error');
+    if (!(error instanceof StaleRpcResponse)) addLog((error as Error).message, 'error');
   }
 }
 function handleCommandError(error: unknown) {

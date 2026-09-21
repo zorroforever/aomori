@@ -79,6 +79,70 @@ test('recovers controls after a signed transaction network failure', async ({ pa
   expect((await response.json()).result.nonce).toBe(1);
 });
 
+test('keeps an unknown receipt retryable when the node has not indexed it yet', async ({ page }) => {
+  const account = `receipt-pending-${Date.now()}`;
+  await createSignedIdentity(page, account);
+  let receiptQueries = 0;
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_submit_transaction') {
+      await route.abort('failed');
+      return;
+    }
+    if (request.method === 'aomori_get_receipt') {
+      receiptQueries++;
+      if (receiptQueries === 1) {
+        await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: null } });
+      } else {
+        await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { ok: true, tx_id: request.params.tx_id, state_root: 'delayed-root', messages: ['延迟回执已确认'] } } });
+      }
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await page.getByRole('button', { name: '查询交易结果' }).click();
+  await expect(page.locator('#log')).toContainText('节点尚未返回该交易回执');
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await expect(page.getByRole('button', { name: '查询交易结果' })).toBeEnabled();
+  await page.getByRole('button', { name: '查询交易结果' }).click();
+  await expect(page.locator('#receipt')).toContainText('SUCCESS');
+  expect(receiptQueries).toBe(2);
+});
+
+test('discards an in-flight receipt query after switching RPC endpoints', async ({ page }) => {
+  const account = `receipt-switch-${Date.now()}`;
+  await createSignedIdentity(page, account);
+  let releaseReceipt!: () => void;
+  const receiptRelease = new Promise<void>(resolve => { releaseReceipt = resolve; });
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_submit_transaction') {
+      await route.abort('failed');
+      return;
+    }
+    if (request.method === 'aomori_get_receipt') {
+      await receiptRelease;
+      await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { ok: true, tx_id: request.params.tx_id, state_root: 'stale-root' } } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('UNKNOWN');
+  await page.getByRole('button', { name: '查询交易结果' }).click();
+  await expect(page.getByRole('button', { name: '查询交易结果' })).toBeDisabled();
+  await page.locator('#rpcInput').fill('http://127.0.0.1:18094');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#receipt')).toContainText('暂无交易');
+  releaseReceipt();
+  await expect(page.locator('#receipt')).toContainText('暂无交易');
+  await expect(page.locator('#log')).not.toContainText('已查询到交易结果');
+});
+
 test('keeps the identity locked when the node public key does not match', async ({ page }) => {
   const account = 'mismatched-key-player';
   await createSignedIdentity(page, account);
