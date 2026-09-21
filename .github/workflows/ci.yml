@@ -69,30 +69,22 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/results.json
       - name: Publish Web E2E summary
         if: always()
+        continue-on-error: true
         run: |
-          if [ -f web/test-results/results.json ]; then
-            node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
-            const fs = require('node:fs');
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const output = process.env.GITHUB_STEP_SUMMARY;
+          let markdown = '## Web E2E\n\n';
+          try {
             const report = JSON.parse(fs.readFileSync('web/test-results/results.json', 'utf8'));
-            const failed = [];
-            for (const suite of report.suites ?? []) {
-              for (const spec of suite.specs ?? []) {
-                for (const test of spec.tests ?? []) {
-                  for (const result of test.results ?? []) {
-                    if (result.status === 'failed' || result.status === 'timedOut') {
-                      failed.push({ title: spec.title, file: spec.file, status: result.status, error: result.error?.message ?? '' });
-                    }
-                  }
-                }
-              }
-            }
-            console.log(`## Web E2E\n\n- Expected: ${report.stats.expected}\n- Unexpected: ${report.stats.unexpected}\n- Flaky: ${report.stats.flaky}\n`);
-            if (failed.length) console.log('### Failures\n\n```json\n' + JSON.stringify(failed, null, 2) + '\n```');
-            NODE
-          else
-            echo '## Web E2E' >> "$GITHUB_STEP_SUMMARY"
-            echo 'Playwright did not produce a JSON report.' >> "$GITHUB_STEP_SUMMARY"
-          fi
+            const stats = report.stats ?? {};
+            markdown += `- Expected: ${stats.expected ?? 'unknown'}\n- Unexpected: ${stats.unexpected ?? 'unknown'}\n- Flaky: ${stats.flaky ?? 'unknown'}\n`;
+          } catch (error) {
+            markdown += `Report unavailable: ${error.message}\n`;
+          }
+          if (output) fs.appendFileSync(output, markdown);
+          process.stdout.write(markdown);
+          NODE
       - name: Upload Web E2E report
         if: always()
         uses: actions/upload-artifact@v4
