@@ -12,7 +12,7 @@ const IDENTITY_ITERATIONS = 210_000;
 const RPC_TIMEOUT_MS = 5_000;
 
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
-const state = { rpc: defaultRpc, actor: 4, account: '', secretKey: null as Uint8Array | null, lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
+const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
 app.innerHTML = `
@@ -59,7 +59,36 @@ async function identityOperation<T>(operation: () => Promise<T> | T) {
 function addLog(text: string, type = '') { const row = document.createElement('div'); row.className = `log-row ${type}`; row.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><span>${escapeHtml(text)}</span>`; log.append(row); log.scrollTop = log.scrollHeight; }
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]!)); }
 function setStatus(stateName: 'online' | 'offline' | 'connecting', text: string) { $('statusDot').className = `dot ${stateName}`; $('statusText').textContent = text; }
-function selectRpc(rpcUrl: string) { const next = rpcUrl.replace(/\/$/, ''); if (next !== state.rpc) { window.clearTimeout(state.reconnectTimer); if (state.socket) { state.socket.onclose = null; state.socket.close(); state.socket = null; } clearSecretKey(); state.account = ''; state.lastEvent = readEventCursor(next); state.seenEvents.clear(); state.recoveringEvents = null; $('eventCount').textContent = '0'; $('eventList').innerHTML = '<span class="muted">等待事件...</span>'; } state.rpc = next; }
+function selectRpc(rpcUrl: string) {
+  const next = rpcUrl.replace(/\/$/, '');
+  if (next === state.rpc) return;
+  state.rpcGeneration++;
+  window.clearTimeout(state.reconnectTimer);
+  if (state.socket) { state.socket.onclose = null; state.socket.close(); state.socket = null; }
+  clearSecretKey();
+  state.account = '';
+  state.roomActors = [];
+  state.quests = [];
+  state.lastEvent = readEventCursor(next);
+  state.seenEvents.clear();
+  state.recoveringEvents = null;
+  $('writeMode').textContent = '开发 command';
+  $('unlockIdentityBtn').hidden = true;
+  $('lockIdentityBtn').hidden = true;
+  $('exportIdentityBtn').hidden = true;
+  $('forgetIdentityBtn').hidden = true;
+  $('location').textContent = '未知';
+  $('head').textContent = '-';
+  $('zoneName').textContent = '未进入世界';
+  $('roomEntities').innerHTML = '<span class="muted">执行 look 查看</span>';
+  $('inventory').innerHTML = '<span class="muted">暂无物品</span>';
+  $('questList').innerHTML = '<span class="muted">暂无任务</span>';
+  $('balance').textContent = '0';
+  $('receipt').innerHTML = '<span class="muted">暂无交易</span>';
+  $('eventCount').textContent = '0';
+  $('eventList').innerHTML = '<span class="muted">等待事件...</span>';
+  state.rpc = next;
+}
 function eventCursorStorageName(rpcUrl: string) { return `aomori:event-cursor:${rpcUrl}`; }
 function readEventCursor(rpcUrl: string) { const value = Number(localStorage.getItem(eventCursorStorageName(rpcUrl))); return Number.isSafeInteger(value) && value > 0 ? value : 0; }
 function storeEventCursor(value: number) { state.lastEvent = value; if (value > 0) localStorage.setItem(eventCursorStorageName(state.rpc), String(value)); else localStorage.removeItem(eventCursorStorageName(state.rpc)); }
@@ -159,9 +188,12 @@ async function importIdentity(file: File) {
 function transactionBytes(tx: any) { return new TextEncoder().encode(JSON.stringify({ from: tx.from, nonce: tx.nonce, entity_id: tx.entity_id, action: tx.action, args: tx.args, signature: null })); }
 const readMethods = new Set(['aomori_get_info', 'aomori_get_account', 'aomori_get_entity', 'aomori_list_entities', 'aomori_get_quests', 'aomori_get_events', 'aomori_query']);
 class RpcError extends Error { constructor(message: string, readonly code?: number, readonly data?: Record<string, unknown>) { super(message); this.name = 'RpcError'; } }
+class StaleRpcResponse extends Error { constructor() { super('RPC endpoint changed'); this.name = 'StaleRpcResponse'; } }
 class TransactionOutcomeUnknown extends Error { constructor(message: string) { super(`交易结果未知，请查询节点账户和事件后再决定是否重试: ${message}`); } }
 function wait(ms: number) { return new Promise(resolve => window.setTimeout(resolve, ms)); }
 async function rpc(method: string, params: object, adminToken?: string) {
+  const requestGeneration = state.rpcGeneration;
+  const requestRpc = state.rpc;
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (adminToken) headers.authorization = `Bearer ${adminToken}`;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -169,7 +201,7 @@ async function rpc(method: string, params: object, adminToken?: string) {
     const timeout = window.setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
     let response: Response;
     try {
-      response = await fetch(`${state.rpc}/rpc`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }), signal: controller.signal });
+      response = await fetch(`${requestRpc}/rpc`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }), signal: controller.signal });
     } catch (error) {
       if ((error as DOMException).name === 'AbortError') throw new RpcError('RPC 请求超时，请检查节点连接');
       if (error instanceof TypeError) throw new RpcError('无法连接节点，请检查节点地址或网络连接');
@@ -177,6 +209,7 @@ async function rpc(method: string, params: object, adminToken?: string) {
     } finally {
       window.clearTimeout(timeout);
     }
+    if (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc) throw new StaleRpcResponse();
     let body: RpcResult;
     try {
       body = await response.json();
@@ -190,6 +223,7 @@ async function rpc(method: string, params: object, adminToken?: string) {
       await wait(delay);
       continue;
     }
+    if (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc) throw new StaleRpcResponse();
     if (body.error) {
       const message = body.error.code === -32004 && Number.isFinite(retryAfterMs) ? `请求过于频繁，请在 ${Math.ceil(retryAfterMs)} 毫秒后重试` : body.error.message;
       throw new RpcError(message, body.error.code, body.error.data);
@@ -280,7 +314,7 @@ async function command(raw: string) {
     setCommandBusy(false);
   }
 }
-async function connect() { if (state.connecting || (state.identityBusy && !state.account) || state.commanding) return; state.connecting = true; const connectButton = $('connectBtn') as HTMLButtonElement; connectButton.disabled = true; setStatus('connecting', '连接中'); selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const owner = actor?.owner || ''; if (!state.secretKey || state.account !== owner) loadIdentity(owner); setStatus('online', '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshStatus(); await look(); } catch (error) { setStatus('offline', '连接失败'); addLog((error as Error).message, 'error'); } finally { state.connecting = false; connectButton.disabled = false; } }
+async function connect() { if (state.connecting || (state.identityBusy && !state.account) || state.commanding) return; state.connecting = true; const connectButton = $('connectBtn') as HTMLButtonElement; connectButton.disabled = true; setStatus('connecting', '连接中'); selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const owner = actor?.owner || ''; if (!state.secretKey || state.account !== owner) loadIdentity(owner); setStatus('online', '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshStatus(); await look(); } catch (error) { if (!(error instanceof StaleRpcResponse)) { setStatus('offline', '连接失败'); addLog((error as Error).message, 'error'); } } finally { state.connecting = false; connectButton.disabled = false; } }
 async function createIdentity() {
   selectRpc(($('rpcInput') as HTMLInputElement).value);
   const account = ($('accountInput') as HTMLInputElement).value.trim();
