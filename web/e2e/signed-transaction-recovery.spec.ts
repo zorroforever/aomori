@@ -14,7 +14,27 @@ async function createSignedIdentity(page: Page, account: string) {
   await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
   await expect(page.getByRole('button', { name: '创建签名身份' })).toBeEnabled();
   await expect(page.locator('#roomEntities')).toContainText('Mira');
+  return Number(await page.locator('#actorInput').inputValue());
 }
+
+test('restores a stored identity as locked after a browser refresh', async ({ page }) => {
+  const account = `refresh-identity-${Date.now()}`;
+  const actorId = await createSignedIdentity(page, account);
+
+  await page.reload();
+  await page.locator('#actorInput').fill(String(actorId));
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.locator('#writeMode')).toContainText(`身份已锁定 · ${account}`);
+  await expect(page.getByRole('button', { name: '解锁本地身份' })).toBeVisible();
+  await expect(page.locator('#commandInput')).toBeEnabled();
+
+  page.once('dialog', dialog => dialog.accept('local-password'));
+  await page.getByRole('button', { name: '解锁本地身份' }).click();
+  await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('SUCCESS');
+});
 
 test('prevents duplicate identity creation while the request is pending', async ({ page }) => {
   await page.goto('/');
