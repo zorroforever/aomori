@@ -177,7 +177,10 @@ async function importIdentity(file: File) {
     if (!account || account.public_key?.toLowerCase() !== backup.publicKey.toLowerCase()) {
       throw new Error('节点账户与备份公钥不匹配');
     }
-    if (validationGeneration !== state.rpcGeneration) throw new StaleRpcResponse();
+    const selectedRpc = ($('rpcInput') as HTMLInputElement).value.replace(/\/$/, '');
+    if (validationGeneration !== state.rpcGeneration || selectedRpc !== targetRpc) {
+      throw new Error('RPC 地址已更改，身份导入已取消');
+    }
     selectRpc(targetRpc);
     localStorage.setItem(keyStorageName(backup.account), JSON.stringify(backup));
     clearSecretKey();

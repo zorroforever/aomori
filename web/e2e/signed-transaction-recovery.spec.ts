@@ -323,6 +323,44 @@ test('keeps the active identity when importing from an unavailable node fails', 
   await expect(page.locator('#receipt')).toContainText('SUCCESS');
 });
 
+test('cancels identity import when the selected RPC changes during validation', async ({ page }) => {
+  const account = `import-rpc-change-${Date.now()}`;
+  await createSignedIdentity(page, account);
+
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出加密备份' }).click();
+  const backupPath = await (await downloadPromise).path();
+  expect(backupPath).toBeTruthy();
+
+  let releaseValidation!: () => void;
+  let markValidationStarted!: () => void;
+  const validationRelease = new Promise<void>(resolve => { releaseValidation = resolve; });
+  const validationStarted = new Promise<void>(resolve => { markValidationStarted = resolve; });
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_get_account' && request.params.name === account) {
+      markValidationStarted();
+      await validationRelease;
+      await route.continue();
+      return;
+    }
+    await route.continue();
+  });
+
+  page.once('dialog', dialog => dialog.accept('backup-password'));
+  await page.locator('#importIdentityFile').setInputFiles(backupPath!);
+  await validationStarted;
+  await page.locator('#rpcInput').fill('http://127.0.0.1:18094');
+  releaseValidation();
+
+  await expect(page.locator('#log')).toContainText('RPC 地址已更改，身份导入已取消');
+  await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
+  await expect(page.getByRole('button', { name: '锁定当前会话' })).toBeVisible();
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#receipt')).toContainText('SUCCESS');
+});
+
 test('can retry identity import after node validation fails', async ({ page }) => {
   const account = 'import-retry-player';
   await createSignedIdentity(page, account);
