@@ -60,41 +60,14 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
-      - name: Run Web E2E
-        id: web-e2e
-        continue-on-error: true
-        run: npm run test:e2e -- --reporter=json
+      - run: npm run test:e2e
         working-directory: web
-        env:
-          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/results.json
-      - name: Publish Web E2E summary
-        if: always()
-        continue-on-error: true
-        run: |
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const output = process.env.GITHUB_STEP_SUMMARY;
-          let markdown = '## Web E2E\n\n';
-          try {
-            const report = JSON.parse(fs.readFileSync('web/test-results/results.json', 'utf8'));
-            const stats = report.stats ?? {};
-            markdown += `- Expected: ${stats.expected ?? 'unknown'}\n- Unexpected: ${stats.unexpected ?? 'unknown'}\n- Flaky: ${stats.flaky ?? 'unknown'}\n`;
-          } catch (error) {
-            markdown += `Report unavailable: ${error.message}\n`;
-          }
-          if (output) fs.appendFileSync(output, markdown);
-          process.stdout.write(markdown);
-          NODE
-      - name: Upload Web E2E report
-        if: always()
+      - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: web/test-results/
           if-no-files-found: ignore
-      - name: Fail if Web E2E failed
-        if: steps.web-e2e.outcome == 'failure'
-        run: exit 1
 
   rpc-smoke:
     name: RPC smoke
