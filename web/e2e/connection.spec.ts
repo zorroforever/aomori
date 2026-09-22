@@ -21,6 +21,31 @@ test('clears the active identity when switching RPC endpoints', async ({ page })
   await expect(page.locator('#receipt')).toContainText('暂无交易');
 });
 
+test('locks RPC and actor inputs while connecting', async ({ page }) => {
+  let releaseInfo!: () => void;
+  const infoRelease = new Promise<void>(resolve => { releaseInfo = resolve; });
+  let infoStarted!: () => void;
+  const infoStartedPromise = new Promise<void>(resolve => { infoStarted = resolve; });
+  await page.route('http://127.0.0.1:18093/rpc', async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_get_info') {
+      infoStarted();
+      await infoRelease;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await infoStartedPromise;
+  await expect(page.locator('#rpcInput')).toBeDisabled();
+  await expect(page.locator('#actorInput')).toBeDisabled();
+  releaseInfo();
+  await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.locator('#rpcInput')).toBeEnabled();
+  await expect(page.locator('#actorInput')).toBeEnabled();
+});
+
 test('shows a recoverable connection failure state', async ({ page }) => {
   await page.goto('/');
   await page.locator('#rpcInput').fill('http://127.0.0.1:19999');

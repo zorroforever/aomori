@@ -48,7 +48,7 @@ function setCommandBusy(busy: boolean) {
 }
 function setIdentityBusy(busy: boolean) {
   state.identityBusy = busy;
-  ['createIdentityBtn', 'unlockIdentityBtn', 'lockIdentityBtn', 'exportIdentityBtn', 'importIdentityBtn', 'forgetIdentityBtn', 'importIdentityFile'].forEach(id => { ($(id) as HTMLButtonElement | HTMLInputElement).disabled = busy || state.commanding; });
+  ['createIdentityBtn', 'unlockIdentityBtn', 'lockIdentityBtn', 'exportIdentityBtn', 'importIdentityBtn', 'forgetIdentityBtn', 'importIdentityFile', 'rpcInput', 'actorInput'].forEach(id => { ($(id) as HTMLButtonElement | HTMLInputElement).disabled = busy || state.commanding || state.connecting; });
 }
 async function identityOperation<T>(operation: () => Promise<T> | T) {
   if (state.identityBusy || state.commanding || state.connecting) return;
@@ -346,7 +346,7 @@ async function command(raw: string) {
     setCommandBusy(false);
   }
 }
-async function connect() { if (state.connecting || (state.identityBusy && !state.account) || state.commanding) return; state.connecting = true; const connectButton = $('connectBtn') as HTMLButtonElement; connectButton.disabled = true; setStatus('connecting', '连接中'); selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const owner = actor?.owner || ''; if (!state.secretKey || state.account !== owner) loadIdentity(owner); setStatus('online', '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshStatus(); await look(); } catch (error) { if (!(error instanceof StaleRpcResponse)) { setStatus('offline', '连接失败'); addLog((error as Error).message, 'error'); } } finally { state.connecting = false; connectButton.disabled = false; } }
+async function connect() { if (state.connecting || (state.identityBusy && !state.account) || state.commanding) return; state.connecting = true; const connectButton = $('connectBtn') as HTMLButtonElement; connectButton.disabled = true; setIdentityBusy(state.identityBusy); setStatus('connecting', '连接中'); selectRpc(($('rpcInput') as HTMLInputElement).value); state.actor = Number(($('actorInput') as HTMLInputElement).value); try { await rpc('aomori_get_info', {}); const actor = await rpc('aomori_get_entity', { entity_id: state.actor }); const owner = actor?.owner || ''; if (!state.secretKey || state.account !== owner) loadIdentity(owner); setStatus('online', '节点在线'); addLog('已连接 Aomori 节点', 'system'); connectEvents(); await refreshStatus(); await look(); } catch (error) { if (!(error instanceof StaleRpcResponse)) { setStatus('offline', '连接失败'); addLog((error as Error).message, 'error'); } } finally { state.connecting = false; connectButton.disabled = false; setIdentityBusy(state.identityBusy); } }
 async function createIdentity() {
   selectRpc(($('rpcInput') as HTMLInputElement).value);
   const account = ($('accountInput') as HTMLInputElement).value.trim();

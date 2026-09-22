@@ -323,8 +323,8 @@ test('keeps the active identity when importing from an unavailable node fails', 
   await expect(page.locator('#receipt')).toContainText('SUCCESS');
 });
 
-test('cancels identity import when the selected RPC changes during validation', async ({ page }) => {
-  const account = `import-rpc-change-${Date.now()}`;
+test('locks RPC selection while identity import validation is pending', async ({ page }) => {
+  const account = `import-rpc-lock-${Date.now()}`;
   await createSignedIdentity(page, account);
 
   page.once('dialog', dialog => dialog.accept('backup-password'));
@@ -351,12 +351,13 @@ test('cancels identity import when the selected RPC changes during validation', 
   page.once('dialog', dialog => dialog.accept('backup-password'));
   await page.locator('#importIdentityFile').setInputFiles(backupPath!);
   await validationStarted;
-  await page.locator('#rpcInput').fill('http://127.0.0.1:18094');
+  await expect(page.locator('#rpcInput')).toBeDisabled();
+  await expect(page.locator('#actorInput')).toBeDisabled();
   releaseValidation();
 
-  await expect(page.locator('#log')).toContainText('RPC 地址已更改，身份导入已取消');
   await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
-  await expect(page.getByRole('button', { name: '锁定当前会话' })).toBeVisible();
+  await expect(page.locator('#rpcInput')).toBeEnabled();
+  await expect(page.locator('#actorInput')).toBeEnabled();
   await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
   await expect(page.locator('#receipt')).toContainText('SUCCESS');
 });
