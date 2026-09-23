@@ -13,7 +13,7 @@ const IDENTITY_ITERATIONS = 210_000;
 const RPC_TIMEOUT_MS = 5_000;
 
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
-const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, pendingTxId: '', lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
+const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, pendingTxId: '', lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, rpcRequests: new Set<AbortController>(), history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
 app.innerHTML = `
@@ -64,6 +64,8 @@ function selectRpc(rpcUrl: string) {
   const next = rpcUrl.replace(/\/$/, '');
   if (next === state.rpc) return;
   state.rpcGeneration++;
+  state.rpcRequests.forEach(controller => controller.abort());
+  state.rpcRequests.clear();
   window.clearTimeout(state.reconnectTimer);
   if (state.socket) { state.socket.onclose = null; state.socket.close(); state.socket = null; }
   clearSecretKey();
@@ -207,16 +209,21 @@ async function rpc(method: string, params: object, adminToken?: string, targetRp
   if (adminToken) headers.authorization = `Bearer ${adminToken}`;
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
+    state.rpcRequests.add(controller);
     const timeout = window.setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
     let response: Response;
     try {
       response = await fetch(`${requestRpc}/rpc`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }), signal: controller.signal });
     } catch (error) {
-      if ((error as DOMException).name === 'AbortError') throw new RpcTransportError('RPC 请求超时，请检查节点连接');
+      if ((error as DOMException).name === 'AbortError') {
+        if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
+        throw new RpcTransportError('RPC 请求超时，请检查节点连接');
+      }
       if (error instanceof TypeError) throw new RpcTransportError('无法连接节点，请检查节点地址或网络连接');
       throw error;
     } finally {
       window.clearTimeout(timeout);
+      state.rpcRequests.delete(controller);
     }
     if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
     let body: RpcResult;
@@ -230,6 +237,7 @@ async function rpc(method: string, params: object, adminToken?: string, targetRp
       const headerSeconds = Number(response.headers.get('retry-after'));
       const delay = Number.isFinite(retryAfterMs) ? Math.max(1, Math.min(retryAfterMs, 2_000)) : Number.isFinite(headerSeconds) ? Math.max(1, Math.min(headerSeconds * 1_000, 2_000)) : 1_000;
       await wait(delay);
+      if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
       continue;
     }
     if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
