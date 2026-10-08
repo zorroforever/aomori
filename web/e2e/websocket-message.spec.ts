@@ -21,6 +21,43 @@ test('deduplicates repeated event ids while keeping later events visible', async
   await expect(page.locator('#eventList .event-id').filter({ hasText: '#900002' })).toHaveCount(1);
 });
 
+test('renders recovered events before live events received during compensation', async ({ page }) => {
+  let releaseRecovery!: () => void;
+  let recoveryStarted!: () => void;
+  let sendLiveEvent!: () => void;
+  const recoveryRelease = new Promise<void>(resolve => { releaseRecovery = resolve; });
+  const recoveryRequest = new Promise<void>(resolve => { recoveryStarted = resolve; });
+  await page.route('http://127.0.0.1:18093/rpc', async route => {
+    const request = route.request().postDataJSON();
+    if (request.method !== 'aomori_get_events') return route.continue();
+    recoveryStarted();
+    await recoveryRelease;
+    await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: {
+      events: [
+        { id: 930001, head: 930001, kind: 'recovered_first', data: {} },
+        { id: 930002, head: 930002, kind: 'recovered_second', data: {} },
+      ],
+      next: 930002, latest: 930003,
+    } } });
+  });
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    ws.connectToServer();
+    sendLiveEvent = () => ws.send(JSON.stringify({ id: 930003, head: 930003, kind: 'live_third', data: {} }));
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await recoveryRequest;
+  sendLiveEvent();
+  await page.waitForTimeout(100);
+  await expect(page.locator('#eventList')).not.toContainText('live_third');
+  releaseRecovery();
+  for (const id of [930001, 930002, 930003]) {
+    await expect(page.locator('#eventList .event-id').filter({ hasText: `#${id}` })).toHaveCount(1);
+  }
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('930003');
+});
+
 test('cancels event compensation rate-limit retry after switching RPC', async ({ page }) => {
   let eventReads = 0;
   await page.route('http://127.0.0.1:18093/rpc', async route => {
