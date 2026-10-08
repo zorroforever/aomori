@@ -21,6 +21,31 @@ test('deduplicates repeated event ids while keeping later events visible', async
   await expect(page.locator('#eventList .event-id').filter({ hasText: '#900002' })).toHaveCount(1);
 });
 
+test('retains only the latest 200 events without moving the cursor backwards', async ({ page }) => {
+  let sendEvents!: () => void;
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    ws.connectToServer();
+    sendEvents = () => {
+      for (let id = 940001; id <= 940205; id++) {
+        ws.send(JSON.stringify({ id, head: id, kind: 'retained_event', data: { id } }));
+      }
+      ws.send(JSON.stringify({ id: 940001, head: 940001, kind: 'old_duplicate', data: {} }));
+    };
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.locator('#eventList .event')).toHaveCount(0);
+  sendEvents();
+  await expect(page.locator('#eventList .event')).toHaveCount(200);
+  await expect(page.locator('#eventCount')).toHaveText('200');
+  await expect(page.locator('#eventList .event-id').first()).toHaveText('#940205');
+  await expect(page.locator('#eventList .event-id').last()).toHaveText('#940006');
+  await expect(page.locator('#eventList')).not.toContainText('old_duplicate');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('940205');
+});
+
 test('renders recovered events before live events received during compensation', async ({ page }) => {
   let releaseRecovery!: () => void;
   let recoveryStarted!: () => void;

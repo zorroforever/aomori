@@ -11,6 +11,7 @@ type IdentityBackup = { format: 'aomori-ed25519-backup'; version: 1; account: st
 
 const IDENTITY_ITERATIONS = 210_000;
 const RPC_TIMEOUT_MS = 5_000;
+const MAX_VISIBLE_EVENTS = 200;
 
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
 const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, pendingTxId: '', lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, pendingEvents: [] as WorldEvent[], rpcRequests: new Set<AbortController>(), rpcWaiters: new Set<() => void>(), history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
@@ -288,7 +289,23 @@ function handleCommandError(error: unknown) {
   else { $('receipt').innerHTML = '<div class="receipt-row"><span>状态</span><strong class="bad">FAILED</strong></div><div class="receipt-row"><span>交易</span><code>-</code></div>'; addLog((error as Error).message, 'error'); }
 }
 function dispatchCommand(raw: string) { if (!state.commanding && !state.identityBusy) command(raw).catch(handleCommandError); }
-function renderEvent(event: WorldEvent) { if (event.id <= state.lastEvent || state.seenEvents.has(event.id)) return; state.seenEvents.add(event.id); const list = $('eventList'); if (list.querySelector('.muted')) list.innerHTML = ''; const row = document.createElement('div'); row.className = 'event'; row.innerHTML = `<div><span class="event-kind">${escapeHtml(event.kind)}</span><span class="event-id">#${event.id}</span></div><p>${escapeHtml(JSON.stringify(event.data))}</p>`; list.prepend(row); $('eventCount').textContent = String(state.seenEvents.size); if (event.id > state.lastEvent) storeEventCursor(event.id); }
+function renderEvent(event: WorldEvent) {
+  if (event.id <= state.lastEvent || state.seenEvents.has(event.id)) return;
+  state.seenEvents.add(event.id);
+  const list = $('eventList');
+  if (list.querySelector('.muted')) list.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'event';
+  row.innerHTML = `<div><span class="event-kind">${escapeHtml(event.kind)}</span><span class="event-id">#${event.id}</span></div><p>${escapeHtml(JSON.stringify(event.data))}</p>`;
+  list.prepend(row);
+  if (list.children.length > MAX_VISIBLE_EVENTS) {
+    const oldest = list.lastElementChild!;
+    state.seenEvents.delete(state.seenEvents.values().next().value!);
+    oldest.remove();
+  }
+  $('eventCount').textContent = String(list.children.length);
+  storeEventCursor(event.id);
+}
 function isLagMessage(value: WorldEvent | EventStreamLagged): value is EventStreamLagged { return 'type' in value && value.type === 'event_stream_lagged'; }
 function parseEventMessage(payload: string): WorldEvent | EventStreamLagged {
   let value: unknown;
