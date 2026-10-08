@@ -21,6 +21,30 @@ test('deduplicates repeated event ids while keeping later events visible', async
   await expect(page.locator('#eventList .event-id').filter({ hasText: '#900002' })).toHaveCount(1);
 });
 
+test('cancels event compensation rate-limit retry after switching RPC', async ({ page }) => {
+  let eventReads = 0;
+  await page.route('http://127.0.0.1:18093/rpc', async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_get_events') {
+      eventReads++;
+      await route.fulfill({ status: 429, json: { jsonrpc: '2.0', id: request.id, error: { code: -32004, message: 'rate limit exceeded', data: { retry_after_ms: 2000 } } } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect.poll(() => eventReads).toBe(1);
+  await expect(page.getByRole('button', { name: '连接节点' })).toBeEnabled();
+  await page.locator('#rpcInput').fill('http://127.0.0.1:19999');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#statusText')).toHaveText('连接失败');
+  await page.waitForTimeout(2200);
+  expect(eventReads).toBe(1);
+  await expect(page.locator('#log')).not.toContainText('事件补偿失败');
+});
+
 test('keeps the event stream usable after compensation fails', async ({ page }) => {
   let compensationFailed = false;
   await page.route('http://127.0.0.1:18093/rpc', async route => {
