@@ -14,7 +14,7 @@ const RPC_TIMEOUT_MS = 5_000;
 const MAX_VISIBLE_EVENTS = 200;
 
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
-const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, pendingTxId: '', lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, pendingEvents: [] as WorldEvent[], rpcRequests: new Set<AbortController>(), rpcWaiters: new Set<() => void>(), history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
+const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, pendingTxId: '', lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, pendingEvents: [] as WorldEvent[], pendingEventsOverflow: false, rpcRequests: new Set<AbortController>(), rpcWaiters: new Set<() => void>(), history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
 app.innerHTML = `
@@ -78,6 +78,7 @@ function selectRpc(rpcUrl: string) {
   state.seenEvents.clear();
   state.recoveringEvents = null;
   state.pendingEvents = [];
+  state.pendingEventsOverflow = false;
   $('writeMode').textContent = '开发 command';
   $('unlockIdentityBtn').hidden = true;
   $('lockIdentityBtn').hidden = true;
@@ -322,6 +323,12 @@ function recoverEvents() {
     const recovery = refreshEvents().finally(() => {
       if (generation !== state.rpcGeneration || state.recoveringEvents !== recovery) return;
       state.recoveringEvents = null;
+      if (state.pendingEventsOverflow) {
+        state.pendingEventsOverflow = false;
+        state.pendingEvents = [];
+        if (state.socket) state.socket.close();
+        return;
+      }
       const pending = state.pendingEvents.splice(0);
       pending.forEach(renderEvent);
     });
@@ -335,7 +342,7 @@ async function recoverOnOpen(socket: WebSocket) {
   if (state.socket !== socket) return;
   await recoverEvents();
 }
-function connectEvents() { window.clearTimeout(state.reconnectTimer); if (state.socket) { state.socket.onclose = null; state.socket.close(); } const socket = new WebSocket(state.rpc.replace(/^http/, 'ws') + '/events'); state.socket = socket; socket.onopen = () => { if (state.socket !== socket) return; setStatus('online', '节点在线'); addLog('实时事件通道已连接', 'system'); recoverOnOpen(socket).catch(error => { if (state.socket === socket && !(error instanceof StaleRpcResponse)) addLog(`事件补偿失败: ${error.message}`, 'error'); }); }; socket.onmessage = event => { if (state.socket !== socket) return; try { const value = parseEventMessage(event.data); if (isLagMessage(value)) { addLog(`事件流落后 ${value.missed} 条，正在补偿`, 'error'); recoverEvents().catch(error => { if (state.socket === socket && !(error instanceof StaleRpcResponse)) addLog(`事件补偿失败: ${error.message}`, 'error'); }); } else if (state.recoveringEvents) state.pendingEvents.push(value); else renderEvent(value); } catch (error) { addLog((error as Error).message, 'error'); } }; socket.onclose = () => { if (state.socket !== socket) return; state.socket = null; setStatus('connecting', '事件通道重连中'); addLog('实时事件通道已断开，准备重连', 'error'); window.clearTimeout(state.reconnectTimer); state.reconnectTimer = window.setTimeout(connectEvents, 3000); }; }
+function connectEvents() { window.clearTimeout(state.reconnectTimer); if (state.socket) { state.socket.onclose = null; state.socket.close(); } const socket = new WebSocket(state.rpc.replace(/^http/, 'ws') + '/events'); state.socket = socket; socket.onopen = () => { if (state.socket !== socket) return; setStatus('online', '节点在线'); addLog('实时事件通道已连接', 'system'); recoverOnOpen(socket).catch(error => { if (state.socket === socket && !(error instanceof StaleRpcResponse)) addLog(`事件补偿失败: ${error.message}`, 'error'); }); }; socket.onmessage = event => { if (state.socket !== socket) return; try { const value = parseEventMessage(event.data); if (isLagMessage(value)) { addLog(`事件流落后 ${value.missed} 条，正在补偿`, 'error'); recoverEvents().catch(error => { if (state.socket === socket && !(error instanceof StaleRpcResponse)) addLog(`事件补偿失败: ${error.message}`, 'error'); }); } else if (state.recoveringEvents) { if (state.pendingEvents.length < MAX_VISIBLE_EVENTS) state.pendingEvents.push(value); else state.pendingEventsOverflow = true; } else renderEvent(value); } catch (error) { addLog((error as Error).message, 'error'); } }; socket.onclose = () => { if (state.socket !== socket) return; state.socket = null; setStatus('connecting', '事件通道重连中'); addLog('实时事件通道已断开，准备重连', 'error'); window.clearTimeout(state.reconnectTimer); state.reconnectTimer = window.setTimeout(connectEvents, 3000); }; }
 async function refreshEvents() { let since = state.lastEvent; let resetStaleCursor = false; while (true) { const result = await rpc('aomori_get_events', { since, limit: 500 }); if (!resetStaleCursor && Number.isSafeInteger(result.latest) && since > result.latest) { resetStaleCursor = true; storeEventCursor(0); state.seenEvents.clear(); since = 0; continue; } result.events.forEach(renderEvent); if (!result.events.length || result.events.length < 500 || result.next <= since) break; since = result.next; } }
 async function renderRoomEntities(location: number) { const entities = await rpc('aomori_list_entities', { location }); const room = entities.filter((entity: any) => entity.id !== state.actor && entity.kind !== 'zone'); state.roomActors = room.filter((entity: any) => entity.kind === 'actor'); $('roomEntities').innerHTML = room.length ? room.map((entity: any) => { const name = entity.data?.name || `${entity.kind} #${entity.id}`; const action = entity.kind === 'item' ? `take ${entity.id}` : `talk ${entity.id}`; const available = state.quests.filter(quest => quest.status === 'available' && quest.giver_entity_id === entity.id); const extra = available.map(quest => `<button class="mini-action" data-command="accept ${entity.id} ${escapeHtml(quest.id)}">接取 ${escapeHtml(quest.title)}</button>`).join(''); return `<div class="entity-card"><button class="entity-action" data-command="${action}"><span>${escapeHtml(name)}</span><small>#${entity.id} · ${action}</small></button>${extra}</div>`; }).join('') : '<span class="muted">这里没有其他实体</span>'; syncCommandControls(); }
 async function refreshInventory() { const result = await rpc('aomori_query', { entity_id: state.actor, action: 'inventory', args: {} }); const ids = result.result.items || []; if (!ids.length) { $('inventory').innerHTML = '<span class="muted">暂无物品</span>'; return; } const entities = await Promise.all(ids.map((id: number) => rpc('aomori_get_entity', { entity_id: id }))); $('inventory').innerHTML = entities.map((entity: any) => { const targets = state.roomActors.map(target => `<option value="${target.id}">${escapeHtml(target.data?.name || `Actor #${target.id}`)}</option>`).join(''); return `<div class="inventory-item"><span>${escapeHtml(entity?.data?.name || `Item #${entity?.id}`)}</span><small>#${entity?.id}</small><button class="inventory-action" data-command="drop ${entity?.id}">丢弃</button>${targets ? `<select class="transfer-target" data-item-id="${entity.id}" aria-label="转移目标"><option value="">给予...</option>${targets}</select>` : ''}</div>`; }).join(''); syncCommandControls(); }

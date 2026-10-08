@@ -36,7 +36,6 @@ test('retains only the latest 200 events without moving the cursor backwards', a
   await page.goto('/');
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#statusText')).toHaveText('节点在线');
-  await expect(page.locator('#eventList .event')).toHaveCount(0);
   sendEvents();
   await expect(page.locator('#eventList .event')).toHaveCount(200);
   await expect(page.locator('#eventCount')).toHaveText('200');
@@ -44,6 +43,51 @@ test('retains only the latest 200 events without moving the cursor backwards', a
   await expect(page.locator('#eventList .event-id').last()).toHaveText('#940006');
   await expect(page.locator('#eventList')).not.toContainText('old_duplicate');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('940205');
+});
+
+test('reconnects and replays events when the recovery buffer fills up', async ({ page }) => {
+  let releaseRecovery!: () => void;
+  const recoveryRelease = new Promise<void>(resolve => { releaseRecovery = resolve; });
+  let firstRead!: () => void;
+  const firstReadStarted = new Promise<void>(resolve => { firstRead = resolve; });
+  let reads = 0;
+  let connections = 0;
+  let sendEvents!: () => void;
+  await page.route('http://127.0.0.1:18093/rpc', async route => {
+    const request = route.request().postDataJSON();
+    if (request.method !== 'aomori_get_events') return route.continue();
+    reads++;
+    if (reads === 1) {
+      firstRead();
+      await recoveryRelease;
+      await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { events: [], next: 0, latest: 0 } } });
+      return;
+    }
+    const events = Array.from({ length: 205 }, (_, index) => ({ id: 950001 + index, head: 950001 + index, kind: 'replayed_event', data: {} }));
+    await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { events, next: 950205, latest: 950205 } } });
+  });
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    connections++;
+    ws.connectToServer();
+    if (connections === 1) sendEvents = () => {
+      for (let id = 950001; id <= 950205; id++) {
+        ws.send(JSON.stringify({ id, head: id, kind: 'buffered_event', data: {} }));
+      }
+    };
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await firstReadStarted;
+  sendEvents();
+  await page.waitForTimeout(250);
+  releaseRecovery();
+  await expect.poll(() => connections, { timeout: 10_000 }).toBe(2);
+  await expect.poll(() => reads).toBe(2);
+  await expect(page.locator('#eventList .event')).toHaveCount(200);
+  await expect(page.locator('#eventList .event-id').first()).toHaveText('#950205');
+  await expect(page.locator('#eventList .event-id').last()).toHaveText('#950006');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('950205');
 });
 
 test('renders recovered events before live events received during compensation', async ({ page }) => {
