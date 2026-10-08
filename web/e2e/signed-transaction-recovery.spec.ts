@@ -301,6 +301,31 @@ test('keeps the identity locked when the node public key does not match', async 
   await expect(page.locator('#log')).toContainText('签名身份已锁定，请先解锁本地身份');
 });
 
+test('locks the identity before signing when the node public key changes', async ({ page }) => {
+  const account = `changed-key-${Date.now()}`;
+  await createSignedIdentity(page, account);
+
+  let submissions = 0;
+  await page.route(rpcUrl, async route => {
+    const request = route.request().postDataJSON();
+    if (request.method === 'aomori_get_account' && request.params.name === account) {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.result.public_key = '00'.repeat(32);
+      await route.fulfill({ response, json: body });
+      return;
+    }
+    if (request.method === 'aomori_submit_transaction') submissions++;
+    await route.continue();
+  });
+
+  await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  await expect(page.locator('#log')).toContainText('节点账户与本地身份公钥不匹配');
+  await expect(page.locator('#writeMode')).toContainText('身份已锁定');
+  await expect(page.getByRole('button', { name: '解锁本地身份' })).toBeVisible();
+  expect(submissions).toBe(0);
+});
+
 test('keeps the active identity when importing from an unavailable node fails', async ({ page }) => {
   const account = `import-preserve-${Date.now()}`;
   await createSignedIdentity(page, account);

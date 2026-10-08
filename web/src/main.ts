@@ -353,11 +353,16 @@ async function submitCommand(action: string, args: Record<string, unknown>) {
     if (state.account && localStorage.getItem(keyStorageName(state.account))) throw new Error('签名身份已锁定，请先解锁本地身份');
     return rpc('aomori_command', { entity_id: state.actor, action, args });
   }
+  const secretKey = state.secretKey;
   for (let attempt = 0; attempt < 2; attempt++) {
     const account = await rpc('aomori_get_account', { name: state.account });
     if (!account) throw new Error(`账户不存在: ${state.account}`);
+    if (account.public_key?.toLowerCase() !== bytesToHex(secretKey.slice(32))) {
+      lockIdentity();
+      throw new Error('节点账户与本地身份公钥不匹配');
+    }
     const tx = { from: state.account, nonce: account.nonce, entity_id: state.actor, action, args, signature: null as string | null };
-    tx.signature = bytesToHex(nacl.sign.detached(transactionBytes(tx), state.secretKey));
+    tx.signature = bytesToHex(nacl.sign.detached(transactionBytes(tx), secretKey));
     state.pendingTxId = bytesToHex(blake3(new TextEncoder().encode(JSON.stringify(tx))));
     try { return await rpc('aomori_submit_transaction', tx); }
     catch (error) {
