@@ -31,26 +31,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-AOMORI_ADMIN_TOKEN="$token" \
-AOMORI_CORS_ORIGINS="http://127.0.0.1:5173" \
-"$binary" --listen "127.0.0.1:$port" --data-dir "$data_dir" \
-  >"$log_file" 2>&1 &
-pid=$!
+start_node() {
+  AOMORI_ADMIN_TOKEN="$token" \
+  AOMORI_CORS_ORIGINS="http://127.0.0.1:5173" \
+  "$binary" --listen "127.0.0.1:$port" --data-dir "$data_dir" --demo "$@" \
+    >>"$log_file" 2>&1 &
+  pid=$!
 
-for attempt in {1..60}; do
-  if curl --fail --silent "http://127.0.0.1:$port/ready" >/dev/null; then
-    break
-  fi
-  if ! kill -0 "$pid" 2>/dev/null; then
-    cat "$log_file" >&2
-    exit 1
-  fi
-  if [[ "$attempt" == 60 ]]; then
-    cat "$log_file" >&2
-    exit 1
-  fi
-  sleep 1
-done
+  for attempt in {1..60}; do
+    if curl --fail --silent "http://127.0.0.1:$port/ready" >/dev/null; then
+      break
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      cat "$log_file" >&2
+      exit 1
+    fi
+    if [[ "$attempt" == 60 ]]; then
+      cat "$log_file" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+start_node
 
 curl --fail --silent "http://127.0.0.1:$port/health" | jq -e '.ok == true' >/dev/null
 curl --fail --silent "http://127.0.0.1:$port/ready" | jq -e '.ready == true' >/dev/null
@@ -94,4 +98,40 @@ if grep -Fq "$token" "$log_file"; then
 fi
 
 test -f "$data_dir/state.json"
-echo "RPC smoke test passed: port=$port"
+# Generate events on a temporary development-mode node only after verifying
+# that the default configuration rejects unsigned commands.
+kill -TERM "$pid"
+wait "$pid"
+pid=""
+start_node --allow-unsigned-commands
+talk_payload='{"jsonrpc":"2.0","id":7,"method":"aomori_submit_transaction","params":{"from":"admin","nonce":0,"entity_id":4,"action":"talk","args":{"npc_id":6},"signature":null}}'
+talk_receipt=$(rpc '' "$talk_payload" | jq -ceS '.result | select(.ok == true)')
+receipt_payload=$(jq -nc --arg tx_id "$(jq -r '.tx_id' <<<"$talk_receipt")" '{jsonrpc:"2.0",id:8,method:"aomori_get_receipt",params:{tx_id:$tx_id}}')
+before_receipt=$(rpc '' "$receipt_payload" | jq -ceS '.result')
+info_payload='{"jsonrpc":"2.0","id":3,"method":"aomori_get_info","params":{}}'
+events_payload='{"jsonrpc":"2.0","id":4,"method":"aomori_get_events","params":{"since":0,"limit":500}}'
+account_payload='{"jsonrpc":"2.0","id":5,"method":"aomori_get_account","params":{"name":"smoke-player"}}'
+before_info=$(rpc '' "$info_payload" | jq -ceS '.result | {head, state_root}')
+before_events=$(rpc '' "$events_payload" | jq -ceS '.result')
+before_account=$(rpc '' "$account_payload" | jq -ceS '.result')
+jq -e '.events | length > 0' <<<"$before_events" >/dev/null
+
+kill -TERM "$pid"
+wait "$pid"
+pid=""
+start_node
+rpc '' "$command_payload" | jq -e '.error.code == -32002' >/dev/null
+rpc '' "$talk_payload" | jq -e '.error.code == -32002' >/dev/null
+
+test "$(rpc '' "$info_payload" | jq -ceS '.result | {head, state_root}')" = "$before_info"
+test "$(rpc '' "$events_payload" | jq -ceS '.result')" = "$before_events"
+test "$(rpc '' "$account_payload" | jq -ceS '.result')" = "$before_account"
+test "$(rpc '' "$receipt_payload" | jq -ceS '.result')" = "$before_receipt"
+latest=$(jq -r '.latest' <<<"$before_events")
+cursor_payload=$(jq -nc --argjson latest "$latest" '{jsonrpc:"2.0",id:6,method:"aomori_get_events",params:{since:$latest,limit:500}}')
+rpc '' "$cursor_payload" | jq -e --argjson latest "$latest" '.result | (.events | length == 0) and .next == $latest and .latest == $latest' >/dev/null
+if grep -Fq "$token" "$log_file"; then
+  echo "admin token leaked through restart logs" >&2
+  exit 1
+fi
+echo "RPC smoke test passed (including persistent restart): port=$port"
