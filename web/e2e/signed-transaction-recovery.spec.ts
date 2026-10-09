@@ -1,7 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 
 const rpcUrl = 'http://127.0.0.1:18093/rpc';
-test.describe.configure({ mode: 'serial' });
+// Each case owns its browser session and account; retries must not replay the
+// whole file or reuse persisted accounts from earlier attempts.
 
 async function createSignedIdentity(page: Page, account: string) {
   await page.goto('/');
@@ -92,7 +94,7 @@ test('prevents duplicate identity creation while the request is pending', async 
 });
 
 test('recovers controls after a signed transaction network failure', async ({ page }) => {
-  const account = 'network-recovery-player';
+  const account = `network-recovery-${randomUUID()}`;
   await createSignedIdentity(page, account);
 
   let failedSubmissions = 0;
@@ -119,10 +121,15 @@ test('recovers controls after a signed transaction network failure', async ({ pa
   await expect(page.locator('#writeMode')).toContainText(`签名交易 · ${account}`);
 
   await page.unroute(rpcUrl);
+  const submission = page.waitForResponse(response => response.url() === rpcUrl && response.request().postDataJSON()?.method === 'aomori_submit_transaction');
   await page.locator('#roomEntities').getByRole('button', { name: /Mira/ }).click();
+  expect((await (await submission).json()).result.ok).toBe(true);
+  await expect(page.locator('#commandInput')).toBeEnabled();
   await expect(page.locator('#receipt')).toContainText('SUCCESS');
-  const response = await page.request.post(rpcUrl, { data: { jsonrpc: '2.0', id: 1, method: 'aomori_get_account', params: { name: account } } });
-  expect((await response.json()).result.nonce).toBe(1);
+  await expect.poll(async () => {
+    const response = await page.request.post(rpcUrl, { data: { jsonrpc: '2.0', id: 1, method: 'aomori_get_account', params: { name: account } } });
+    return (await response.json()).result.nonce;
+  }).toBe(1);
 });
 
 test('keeps an unknown receipt retryable when the node has not indexed it yet', async ({ page }) => {
@@ -276,7 +283,7 @@ test('discards an in-flight receipt query after switching RPC endpoints', async 
 });
 
 test('keeps the identity locked when the node public key does not match', async ({ page }) => {
-  const account = 'mismatched-key-player';
+  const account = `mismatched-key-${randomUUID()}`;
   await createSignedIdentity(page, account);
   await page.getByRole('button', { name: '锁定当前会话' }).click();
   await expect(page.locator('#writeMode')).toContainText('身份已锁定');
@@ -388,7 +395,7 @@ test('locks RPC selection while identity import validation is pending', async ({
 });
 
 test('can retry identity import after node validation fails', async ({ page }) => {
-  const account = 'import-retry-player';
+  const account = `import-retry-${randomUUID()}`;
   await createSignedIdentity(page, account);
 
   page.once('dialog', dialog => dialog.accept('backup-password'));
@@ -424,7 +431,7 @@ test('can retry identity import after node validation fails', async ({ page }) =
 });
 
 test('refreshes the nonce and re-signs once after a nonce conflict', async ({ page }) => {
-  const account = 'nonce-retry-player';
+  const account = `nonce-retry-${randomUUID()}`;
   await createSignedIdentity(page, account);
 
   const transactions: Array<{ nonce: number; signature: string }> = [];

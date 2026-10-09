@@ -40,7 +40,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 - Current Rust suite includes monitoring/TLS deployment contracts (87 tests total).
 - Rust fmt/check/clippy, Web build, shell syntax, RPC smoke, YAML/JSON parsing and monitoring Compose parse passed.
 - Counts are the handoff baseline; use actual test output if more tests are added.
-- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed: Web E2E failed in run 37912972291; all other jobs succeeded. The failure output is not available from anonymous APIs. CI-mode local E2E passed 48/48, and native stdout is now also preserved in failure artifacts.
+- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed: Web E2E failed in run 37912972291; all other jobs succeeded. Fixed-account reuse was reproduced on repeat execution, and a stale SUCCESS assertion race was repaired. The signed-transaction file passed two consecutive CI-mode runs (38 cases). Independent tests no longer share serial retry grouping; native stdout is preserved in failure artifacts. Matching remote results remain required.
 
 ## Explicitly deferred
 
