@@ -29,7 +29,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 | TLS proxy | Caddy SPA/RPC/WebSocket configuration; forwarding chain overwrite; metrics exclusion | Validate Caddy and certificates on deployment host, public DNS, HTTPS/WebSocket connectivity |
 | Monitoring | Prometheus scrape/rules and Grafana provisioning verified in running containers | Configure/test organization-specific Alertmanager receivers and staging persistence |
 | Docker | Hardened image/Compose/runtime smoke verified locally via sudo | Repeat on the target deployment host |
-| Remote CI | Existing checks plus deployment-config validation job | GitHub API reported CI `disabled_manually`; owner must enable workflow, trigger a run and confirm the matching commit's checks |
+| Remote CI | Existing checks plus deployment-config validation job | CI has been re-enabled (`active` confirmed by GitHub API); trigger a run and confirm the matching commit's checks |
 | Long-duration/resource acceptance | Configurable soak (seconds/connections), run instructions | Hour/day runs and RSS/CPU/disk growth measurements on staging hardware |
 | Disk/power-loss acceptance | Deterministic storage/RPC failure tests plus real temporary-path obstruction | ENOSPC, interrupted filesystem writes and host power loss on disposable infrastructure |
 
@@ -39,7 +39,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 - Previous handoff Rust baseline: 85 tests passed; this closure adds a monitoring smoke contract test (86 total).
 - Rust fmt/check/clippy, Web build, shell syntax, RPC smoke, YAML/JSON parsing and monitoring Compose parse passed.
 - Counts are the handoff baseline; use actual test output if more tests are added.
-- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed (workflow manually disabled).
+- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed; the workflow is active again, but the matching commit's results must be checked.
 
 ## Explicitly deferred
 
@@ -47,7 +47,7 @@ Blocks, consensus, P2P, multi-node sync, Gas and economic mechanisms are out of 
 
 ## Operator closure
 
-1. Enable CI in GitHub Actions (or with an authenticated `gh workflow enable CI`), then trigger/verify a push or PR for the final commit. The workflow has no `workflow_dispatch` trigger.
+1. CI is enabled again. Trigger/verify a push, PR or manual Actions → CI → Run workflow for the final commit, and inspect all job results. Re-enabling a workflow does not retroactively run old pushes.
 2. Run Docker smoke and deployment validators on a Docker-capable host; do not bypass failures.
 3. Follow [deployment steps](../deploy/README.md) for TLS, monitoring, offline backup and staging soak. Set unique credentials and verify expected firewall/loopback boundaries.
 4. Record real measurements and environment-specific acceptance. Only then declare deployment acceptance complete.

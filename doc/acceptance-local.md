@@ -39,4 +39,4 @@ The node PID was sampled using `ps -p PID -o rss=,%cpu=` every five seconds; sna
 
 ## Remaining external closure
 
-GitHub's workflow API still reports CI as `disabled_manually`. No remote CI pass is claimed. Enable the workflow with an authorized account, then run it for the final commit. Actual TLS/DNS, organization notification receivers, long-duration staging resource measurements and destructive fault drills remain separate acceptance items.
+GitHub's workflow API now reports CI as `active`, after the owner re-enabled it. No remote CI pass is claimed until a run for the final commit completes successfully. A new push or manual workflow dispatch can trigger that run. Actual TLS/DNS, organization notification receivers, long-duration staging resource measurements and destructive fault drills remain separate acceptance items.
