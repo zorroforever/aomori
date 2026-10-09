@@ -165,6 +165,61 @@ fn ci_runs_quality_web_e2e_and_container_checks_with_minimal_permissions() {
     assert!(!CI.contains("permissions: write-all"));
 }
 
+#[test]
+fn proxy_and_monitoring_examples_keep_private_endpoints_private() {
+    let proxy = include_str!("../deploy/Caddyfile");
+    for required in [
+        "reverse_proxy 127.0.0.1:8091",
+        "header_up X-Forwarded-For {remote_host}",
+        "@metrics path /metrics /metrics/*",
+        "respond @metrics 404",
+    ] {
+        assert!(
+            proxy.contains(required),
+            "missing proxy boundary: {required}"
+        );
+    }
+    let monitoring = include_str!("../deploy/monitoring/compose.yaml");
+    for required in [
+        "--web.listen-address=127.0.0.1:9090",
+        "GF_SERVER_HTTP_ADDR: 127.0.0.1",
+        "GF_AUTH_ANONYMOUS_ENABLED: \"false\"",
+        "${GRAFANA_ADMIN_PASSWORD:?set a unique Grafana password}",
+    ] {
+        assert!(
+            monitoring.contains(required),
+            "missing monitoring boundary: {required}"
+        );
+    }
+    let dashboard: serde_json::Value =
+        serde_json::from_str(include_str!("../deploy/monitoring/dashboards/aomori.json")).unwrap();
+    assert_eq!(dashboard["panels"].as_array().unwrap().len(), 8);
+    assert!(
+        include_str!("../deploy/monitoring/alerts.yml").contains("aomori_snapshot_failures_total")
+    );
+    assert!(CI.contains("name: Deployment configuration"));
+}
+
+#[test]
+fn restart_smoke_covers_crash_and_offline_restore_without_secret_output() {
+    for required in [
+        "kill -KILL",
+        "crash_status",
+        "verify_state",
+        "capture_state",
+        "state.tar.gz",
+        "post-backup-data",
+        "aomori_get_receipt",
+        ".result.nonce == 2",
+    ] {
+        assert!(
+            RPC_SMOKE.contains(required),
+            "missing recovery check: {required}"
+        );
+    }
+    assert!(!RPC_SMOKE.contains("set -x"));
+}
+
 fn service_directives(contents: &str) -> BTreeMap<&str, &str> {
     contents
         .lines()

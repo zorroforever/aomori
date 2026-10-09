@@ -1,0 +1,35 @@
+# Linux, same-host node at 127.0.0.1:8091. No public monitoring listeners.
+services:
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.listen-address=127.0.0.1:9090
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  grafana:
+    image: grafana/grafana:11.6.0
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: 3000
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?set a unique Grafana password}"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+volumes:
+  prometheus-data:
+  grafana-data:

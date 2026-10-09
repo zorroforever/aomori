@@ -12,6 +12,7 @@ type IdentityBackup = { format: 'aomori-ed25519-backup'; version: 1; account: st
 const IDENTITY_ITERATIONS = 210_000;
 const RPC_TIMEOUT_MS = 5_000;
 const MAX_VISIBLE_EVENTS = 200;
+const MAX_LOG_ROWS = 500;
 
 const defaultRpc = import.meta.env.VITE_AOMORI_RPC || `${window.location.protocol}//${window.location.hostname}:8091`;
 const state = { rpc: defaultRpc, rpcGeneration: 0, actor: 4, account: '', secretKey: null as Uint8Array | null, pendingTxId: '', lastEvent: readEventCursor(defaultRpc), seenEvents: new Set<number>(), recoveringEvents: null as Promise<void> | null, pendingEvents: [] as WorldEvent[], pendingEventsOverflow: false, rpcRequests: new Set<AbortController>(), rpcWaiters: new Set<() => void>(), history: [] as string[], historyIndex: -1, socket: null as WebSocket | null, reconnectTimer: 0, connecting: false, commanding: false, identityBusy: false, roomActors: [] as any[], quests: [] as any[] };
@@ -58,7 +59,7 @@ async function identityOperation<T>(operation: () => Promise<T> | T) {
   catch (error) { addLog((error as Error).message, 'error'); }
   finally { setIdentityBusy(false); }
 }
-function addLog(text: string, type = '') { const row = document.createElement('div'); row.className = `log-row ${type}`; row.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><span>${escapeHtml(text)}</span>`; log.append(row); log.scrollTop = log.scrollHeight; }
+function addLog(text: string, type = '') { const row = document.createElement('div'); row.className = `log-row ${type}`; row.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><span>${escapeHtml(text)}</span>`; log.append(row); if (log.children.length > MAX_LOG_ROWS) log.firstElementChild!.remove(); log.scrollTop = log.scrollHeight; }
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]!)); }
 function setStatus(stateName: 'online' | 'offline' | 'connecting', text: string) { $('statusDot').className = `dot ${stateName}`; $('statusText').textContent = text; }
 function selectRpc(rpcUrl: string) {
@@ -318,8 +319,9 @@ function parseEventMessage(payload: string): WorldEvent | EventStreamLagged {
   try { value = JSON.parse(payload); } catch { throw new Error('事件通道返回了无效 JSON'); }
   if (!value || typeof value !== 'object') throw new Error('事件通道返回了无效消息');
   const message = value as Record<string, unknown>;
-  if (message.type === 'event_stream_lagged' && typeof message.missed === 'number' && typeof message.last_event_id === 'number') return message as unknown as EventStreamLagged;
-  if (typeof message.id === 'number' && typeof message.head === 'number' && typeof message.kind === 'string' && typeof message.data === 'object' && message.data !== null) return message as unknown as WorldEvent;
+  const validCounter = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+  if (message.type === 'event_stream_lagged' && validCounter(message.missed) && validCounter(message.last_event_id)) return message as unknown as EventStreamLagged;
+  if (validCounter(message.id) && message.id > 0 && validCounter(message.head) && typeof message.kind === 'string' && typeof message.data === 'object' && message.data !== null && !Array.isArray(message.data)) return message as unknown as WorldEvent;
   throw new Error('事件通道返回了未知消息');
 }
 function recoverEvents() {

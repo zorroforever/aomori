@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT_DIR"
 
-for command in curl jq; do
+for command in curl jq tar; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "$command command is required" >&2
     exit 1
@@ -20,6 +20,7 @@ fi
 port="${AOMORI_RPC_SMOKE_PORT:-28092}"
 data_dir=$(mktemp -d)
 log_file=$(mktemp)
+backup_dir=$(mktemp -d)
 token=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
 pid=""
 cleanup() {
@@ -27,7 +28,7 @@ cleanup() {
     kill -TERM "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   fi
-  rm -rf "$data_dir" "$log_file"
+  rm -rf "$data_dir" "$log_file" "$backup_dir"
 }
 trap cleanup EXIT
 
@@ -174,8 +175,42 @@ cursor_payload=$(jq -nc --argjson latest "$latest" '{jsonrpc:"2.0",id:10,method:
 rpc '' "$cursor_payload" | jq -e --argjson latest "$latest" '.result | (.events | length > 0) and all(.events[]; .id > $latest) and .next == .latest' >/dev/null
 rpc '' "$command_payload" | jq -e '.error.code == -32002' >/dev/null
 rpc '' "$crash_payload" | jq -e '.error.code == -32002' >/dev/null
+# Offline full-directory backup and restore: preserve the post-backup data as
+# a separate directory rather than overwriting a live node or individual files.
+capture_state
+kill -TERM "$pid"
+wait "$pid"
+pid=""
+tar -C "$data_dir" -czf "$backup_dir/state.tar.gz" .
+start_node
+extra_payload='{"jsonrpc":"2.0","id":12,"method":"aomori_create_account","params":{"name":"after-backup"}}'
+rpc "authorization: Bearer $token" "$extra_payload" | jq -e '.result.name == "after-backup"' >/dev/null
+kill -TERM "$pid"
+wait "$pid"
+pid=""
+mv "$data_dir" "$backup_dir/post-backup-data"
+mkdir "$data_dir"
+tar -C "$data_dir" -xzf "$backup_dir/state.tar.gz"
+start_node
+verify_state
+rpc '' "$crash_receipt_payload" | jq -e --arg tx_id "$(jq -r '.tx_id' <<<"$crash_receipt")" '.result.tx_id == $tx_id' >/dev/null
+absent_payload='{"jsonrpc":"2.0","id":13,"method":"aomori_get_account","params":{"name":"after-backup"}}'
+rpc '' "$absent_payload" | jq -e 'has("result") and .result == null' >/dev/null
+
+# A filesystem obstruction exercises real snapshot failure/rollback without
+# consuming the host's disk or modifying any non-test directory.
+mkdir "$data_dir/state.json.tmp"
+blocked_payload='{"jsonrpc":"2.0","id":14,"method":"aomori_create_account","params":{"name":"blocked-write"}}'
+rpc "authorization: Bearer $token" "$blocked_payload" | jq -e '.error != null' >/dev/null
+verify_state
+blocked_account='{"jsonrpc":"2.0","id":15,"method":"aomori_get_account","params":{"name":"blocked-write"}}'
+rpc '' "$blocked_account" | jq -e 'has("result") and .result == null' >/dev/null
+rmdir "$data_dir/state.json.tmp"
+rpc "authorization: Bearer $token" "$blocked_payload" | jq -e '.result.name == "blocked-write"' >/dev/null
+rpc '' "$blocked_account" | jq -e '.result.name == "blocked-write"' >/dev/null
+
 if grep -Fq "$token" "$log_file"; then
   echo "admin token leaked through restart logs" >&2
   exit 1
 fi
-echo "RPC smoke test passed (including graceful restart and SIGKILL recovery): port=$port"
+echo "RPC smoke test passed (restart, SIGKILL, backup restore, write-failure rollback): port=$port"

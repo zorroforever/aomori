@@ -87,8 +87,8 @@ npm run dev
 
 1. Rust 单元测试和集成测试验证世界状态、Lua 执行、事务回滚、RPC、事件、迁移和快照恢复。
 2. Web 构建验证 TypeScript 和 Vite 生产构建。
-3. Playwright E2E 验证 Demo 中的任务流程。
-4. RPC smoke 验证健康检查、metrics、管理员认证、unsigned command 策略和快照生成。
+3. Playwright E2E 验证任务、身份恢复、RPC 异常、交易回执、分页事件补偿、真实节点重启后的浏览器恢复，以及可调持续时间的并发读/WebSocket 基线。
+4. RPC smoke 验证健康检查、metrics、管理员认证、unsigned command 策略、正常重启、已确认写入后的 SIGKILL 恢复和离线完整目录备份恢复。
 5. Docker smoke 验证非 root、只读根文件系统、capability 删除和数据卷恢复。
 
 ## 5. 后续阶段
@@ -108,6 +108,7 @@ npm run dev
 
 ### 客户端和平台
 
-1. 扩充 Web E2E：身份解锁、签名交易、nonce 冲突、WebSocket 重连和异常网络状态。
-2. 增加 TLS 反向代理、Prometheus/Grafana 和备份恢复示例。
-3. 补充高并发、长时间运行和磁盘故障演练。
+1. 已补充身份、签名交易、nonce 冲突、WebSocket 重连和异常网络 E2E；后续按实际问题持续扩展。
+2. TLS 代理、Prometheus/Grafana、告警规则及备份恢复示例见 [部署说明](../deploy/README.md)；实际证书、通知接收方和目标环境验收仍需部署方完成。
+3. 已提供并发基线和可调 soak；数小时持续运行、实际磁盘耗尽/断电演练及容量规划仍需独立环境验证。
+4. 当前验收状态见 [开发清单](development-status.md)，不得把本地通过等同于远程 CI 全绿。

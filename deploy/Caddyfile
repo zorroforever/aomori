@@ -1,0 +1,28 @@
+# Run on the SAME host as the loopback-only node. Set AOMORI_DOMAIN to your
+# public DNS hostname, and install web/dist at /srv/aomori/web after npm run build.
+# Configure node CORS for https://<domain>. Never enable unsigned commands here.
+{$AOMORI_DOMAIN} {
+	root * /srv/aomori/web
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		-Server
+	}
+
+	# Monitoring stays on loopback; do not publish world/metrics endpoints.
+	@metrics path /metrics /metrics/*
+	respond @metrics 404
+
+	@node path /rpc /events /health /ready
+	handle @node {
+		reverse_proxy 127.0.0.1:8091 {
+			# Never pass a user-supplied forwarding chain to the node.
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

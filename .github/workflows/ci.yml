@@ -79,6 +79,16 @@ jobs:
       - run: cargo build --locked
       - run: ./scripts/rpc-smoke.sh
 
+  deployment-config:
+    name: Deployment configuration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: GRAFANA_ADMIN_PASSWORD=validation-only docker compose -f deploy/monitoring/compose.yaml config --quiet
+      - run: docker run --rm -e AOMORI_DOMAIN=mud.example.com -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.9.1 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - run: docker run --rm --entrypoint promtool -v "$PWD/deploy/monitoring:/etc/prometheus:ro" prom/prometheus:v3.2.1 check config /etc/prometheus/prometheus.yml
+      - run: docker run --rm --entrypoint promtool -v "$PWD/deploy/monitoring:/etc/prometheus:ro" prom/prometheus:v3.2.1 check rules /etc/prometheus/alerts.yml
+
   docker:
     name: Docker smoke
     runs-on: ubuntu-24.04

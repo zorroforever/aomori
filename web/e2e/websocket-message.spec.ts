@@ -1,5 +1,28 @@
 import { expect, test } from '@playwright/test';
 
+test('bounds malformed-message logs and rejects unsafe event cursors', async ({ page }) => {
+  let sendMessages!: () => void;
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    const server = ws.connectToServer();
+    server.onMessage(() => undefined);
+    sendMessages = () => {
+      for (let index = 0; index < 510; index++) ws.send('not-json');
+      for (const id of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        ws.send(JSON.stringify({ id, head: 1, kind: 'unsafe_cursor', data: {} }));
+      }
+      ws.send(JSON.stringify({ id: 990001, head: 990001, kind: 'valid_after_bad_messages', data: {} }));
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#connectBtn')).toBeEnabled();
+  sendMessages();
+  await expect(page.locator('#eventList')).toContainText('valid_after_bad_messages');
+  await expect(page.locator('#log .log-row')).toHaveCount(500);
+  await expect(page.locator('#eventList')).not.toContainText('unsafe_cursor');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('990001');
+});
+
 test('deduplicates repeated event ids while keeping later events visible', async ({ page }) => {
   await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
     const server = ws.connectToServer();

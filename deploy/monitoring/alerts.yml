@@ -1,0 +1,29 @@
+groups:
+  - name: aomori
+    rules:
+      - alert: AomoriNodeUnavailable
+        expr: up{job="aomori"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Aomori metrics scrape is unavailable
+      - alert: AomoriSnapshotFailure
+        expr: increase(aomori_snapshot_failures_total{job="aomori"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Aomori snapshot persistence failed
+      - alert: AomoriEventStreamLag
+        expr: increase(aomori_websocket_lag_incidents_total{job="aomori"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Aomori websocket clients required event compensation
+      - alert: AomoriRpcErrorRatio
+        expr: rate(aomori_rpc_errors_total{job="aomori"}[5m]) / clamp_min(rate(aomori_rpc_requests_total{job="aomori"}[5m]), 0.001) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Aomori RPC error ratio exceeds ten percent
