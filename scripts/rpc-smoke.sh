@@ -111,10 +111,26 @@ before_receipt=$(rpc '' "$receipt_payload" | jq -ceS '.result')
 info_payload='{"jsonrpc":"2.0","id":3,"method":"aomori_get_info","params":{}}'
 events_payload='{"jsonrpc":"2.0","id":4,"method":"aomori_get_events","params":{"since":0,"limit":500}}'
 account_payload='{"jsonrpc":"2.0","id":5,"method":"aomori_get_account","params":{"name":"smoke-player"}}'
-before_info=$(rpc '' "$info_payload" | jq -ceS '.result | {head, state_root}')
-before_events=$(rpc '' "$events_payload" | jq -ceS '.result')
-before_account=$(rpc '' "$account_payload" | jq -ceS '.result')
-jq -e '.events | length > 0' <<<"$before_events" >/dev/null
+capture_state() {
+  before_info=$(rpc '' "$info_payload" | jq -ceS '.result | {head, state_root}')
+  before_events=$(rpc '' "$events_payload" | jq -ceS '.result')
+  before_account=$(rpc '' "$account_payload" | jq -ceS '.result')
+  before_receipt=$(rpc '' "$receipt_payload" | jq -ceS '.result')
+  jq -e '.events | length > 0' <<<"$before_events" >/dev/null
+}
+
+verify_state() {
+  test "$(rpc '' "$info_payload" | jq -ceS '.result | {head, state_root}')" = "$before_info"
+  test "$(rpc '' "$events_payload" | jq -ceS '.result')" = "$before_events"
+  test "$(rpc '' "$account_payload" | jq -ceS '.result')" = "$before_account"
+  test "$(rpc '' "$receipt_payload" | jq -ceS '.result')" = "$before_receipt"
+  local latest cursor_payload
+  latest=$(jq -r '.latest' <<<"$before_events")
+  cursor_payload=$(jq -nc --argjson latest "$latest" '{jsonrpc:"2.0",id:6,method:"aomori_get_events",params:{since:$latest,limit:500}}')
+  rpc '' "$cursor_payload" | jq -e --argjson latest "$latest" '.result | (.events | length == 0) and .next == $latest and .latest == $latest' >/dev/null
+}
+
+capture_state
 
 kill -TERM "$pid"
 wait "$pid"
@@ -123,15 +139,43 @@ start_node
 rpc '' "$command_payload" | jq -e '.error.code == -32002' >/dev/null
 rpc '' "$talk_payload" | jq -e '.error.code == -32002' >/dev/null
 
-test "$(rpc '' "$info_payload" | jq -ceS '.result | {head, state_root}')" = "$before_info"
-test "$(rpc '' "$events_payload" | jq -ceS '.result')" = "$before_events"
+verify_state
+
+# Acknowledge another write, then kill the development node without giving it
+# a graceful shutdown opportunity. SIGKILL is not a power-loss simulation.
+kill -TERM "$pid"
+wait "$pid"
+pid=""
+start_node --allow-unsigned-commands
+capture_state
+crash_payload=$(jq -c '.params.nonce = 1' <<<"$talk_payload")
+crash_receipt=$(rpc '' "$crash_payload" | jq -ceS '.result | select(.ok == true)')
+kill -KILL "$pid"
+crash_status=0
+wait "$pid" 2>/dev/null || crash_status=$?
+pid=""
+test "$crash_status" -eq 137
+start_node
+
+# Read expectations come from the acknowledged response and pre-write state,
+# rather than from a final snapshot taken after a graceful shutdown.
+crash_receipt_payload=$(jq -nc --arg tx_id "$(jq -r '.tx_id' <<<"$crash_receipt")" '{jsonrpc:"2.0",id:9,method:"aomori_get_receipt",params:{tx_id:$tx_id}}')
+test "$(rpc '' "$crash_receipt_payload" | jq -ceS '.result')" = "$crash_receipt"
+admin_payload='{"jsonrpc":"2.0","id":11,"method":"aomori_get_account","params":{"name":"admin"}}'
+rpc '' "$admin_payload" | jq -e '.result.nonce == 2' >/dev/null
+old_head=$(jq -r '.head' <<<"$before_info")
+rpc '' "$info_payload" | jq -e --argjson head "$old_head" --arg root "$(jq -r '.state_root' <<<"$crash_receipt")" '.result | .head == ($head + 1) and .state_root == $root' >/dev/null
 test "$(rpc '' "$account_payload" | jq -ceS '.result')" = "$before_account"
 test "$(rpc '' "$receipt_payload" | jq -ceS '.result')" = "$before_receipt"
 latest=$(jq -r '.latest' <<<"$before_events")
-cursor_payload=$(jq -nc --argjson latest "$latest" '{jsonrpc:"2.0",id:6,method:"aomori_get_events",params:{since:$latest,limit:500}}')
-rpc '' "$cursor_payload" | jq -e --argjson latest "$latest" '.result | (.events | length == 0) and .next == $latest and .latest == $latest' >/dev/null
+crash_events=$(rpc '' "$events_payload" | jq -ceS '.result')
+jq -e --argjson old "$before_events" '.events[0:($old.events | length)] == $old.events and .latest > $old.latest' <<<"$crash_events" >/dev/null
+cursor_payload=$(jq -nc --argjson latest "$latest" '{jsonrpc:"2.0",id:10,method:"aomori_get_events",params:{since:$latest,limit:500}}')
+rpc '' "$cursor_payload" | jq -e --argjson latest "$latest" '.result | (.events | length > 0) and all(.events[]; .id > $latest) and .next == .latest' >/dev/null
+rpc '' "$command_payload" | jq -e '.error.code == -32002' >/dev/null
+rpc '' "$crash_payload" | jq -e '.error.code == -32002' >/dev/null
 if grep -Fq "$token" "$log_file"; then
   echo "admin token leaked through restart logs" >&2
   exit 1
 fi
-echo "RPC smoke test passed (including persistent restart): port=$port"
+echo "RPC smoke test passed (including graceful restart and SIGKILL recovery): port=$port"

@@ -82,7 +82,7 @@ cargo build --locked
 ./scripts/rpc-smoke.sh
 ```
 
-该脚本验证 `/health`、`/ready`、JSON/Prometheus metrics、管理 Token 鉴权、默认拒绝 unsigned command，以及状态快照生成。它还会在临时 Demo 节点上短暂启用开发命令以生成真实事件和交易回执，随后正常停止并以默认安全配置从同一数据目录重启，验证新建账户、事件历史、事件游标、交易回执、世界高度和 state root 保持一致，同时再次确认 unsigned command 被拒绝。该验证覆盖正常停机后的持久化恢复，不代表异常断电或 WebSocket 重连已完成端到端验收。测试 Token 只存在于进程环境和内存中，结束时会清理临时数据和日志。
+该脚本验证 `/health`、`/ready`、JSON/Prometheus metrics、管理 Token 鉴权、默认拒绝 unsigned command，以及状态快照生成。它还会在临时 Demo 节点上短暂启用开发命令以生成真实事件和交易回执，随后正常停止并以默认安全配置从同一数据目录重启，验证新建账户、事件历史、事件游标、交易回执、世界高度和 state root 保持一致，同时再次确认 unsigned command 被拒绝。随后脚本会在另一笔交易返回成功后立即发送 SIGKILL，再验证该交易的回执、账户 nonce、状态根以及旧游标之后的新增事件均可恢复。该验证覆盖正常停机和已确认写入后的进程异常退出，不代表写入中途崩溃、宿主机断电或浏览器 WebSocket 重连已完成端到端验收。测试 Token 只存在于进程环境和内存中，结束时会清理临时数据和日志。
 
 ## 探针和监控
 
