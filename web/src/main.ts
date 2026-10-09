@@ -323,10 +323,11 @@ function parseEventMessage(payload: string): WorldEvent | EventStreamLagged {
 function recoverEvents() {
   if (!state.recoveringEvents) {
     const generation = state.rpcGeneration;
-    const recovery = refreshEvents().finally(() => {
+    let recovered = false;
+    const recovery = refreshEvents().then(() => { recovered = true; }).finally(() => {
       if (generation !== state.rpcGeneration || state.recoveringEvents !== recovery) return;
       state.recoveringEvents = null;
-      if (state.pendingEventsOverflow) {
+      if (state.pendingEventsOverflow || (!recovered && state.pendingEvents.length > 0)) {
         state.pendingEventsOverflow = false;
         state.pendingEvents = [];
         if (state.socket) state.socket.close();

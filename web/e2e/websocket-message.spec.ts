@@ -175,6 +175,51 @@ test('replays multiple event pages before releasing buffered live events', async
   await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('971006');
 });
 
+test('retries from the last recovered page when a later page fails with live events buffered', async ({ page }) => {
+  const base = 980000;
+  const cursors: number[] = [];
+  let sendLive!: () => void;
+  let failPage!: () => void;
+  let pageStarted!: () => void;
+  const failingPage = new Promise<void>(resolve => { pageStarted = resolve; });
+  const failRelease = new Promise<void>(resolve => { failPage = resolve; });
+  await page.route('http://127.0.0.1:18093/rpc', async route => {
+    const request = route.request().postDataJSON();
+    if (request.method !== 'aomori_get_events') return route.continue();
+    const since = request.params.since;
+    cursors.push(since);
+    if (cursors.length === 2) {
+      pageStarted();
+      await failRelease;
+      await route.abort('failed');
+      return;
+    }
+    const first = Math.max(base + 1, since + 1);
+    const last = Math.min(first + 499, base + 510);
+    const events = Array.from({ length: Math.max(0, last - first + 1) }, (_, index) => ({
+      id: first + index, head: first + index, kind: 'retried_history', data: {},
+    }));
+    await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { events, next: last, latest: base + 510 } } });
+  });
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    const server = ws.connectToServer();
+    server.onMessage(() => undefined);
+    sendLive = () => ws.send(JSON.stringify({ id: base + 510, head: base + 510, kind: 'buffered_latest', data: {} }));
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await failingPage;
+  sendLive();
+  await page.waitForTimeout(100);
+  failPage();
+  await expect.poll(() => cursors.length, { timeout: 10_000 }).toBe(3);
+  expect(cursors).toEqual([0, base + 500, base + 500]);
+  await expect(page.locator('#eventList .event-id').first()).toHaveText('#980510');
+  await expect(page.locator('#eventList .event-id').filter({ hasText: /^#980501$/ })).toHaveCount(1);
+  await expect(page.locator('#eventList')).not.toContainText('buffered_latest');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('980510');
+});
+
 test('renders recovered events before live events received during compensation', async ({ page }) => {
   let releaseRecovery!: () => void;
   let recoveryStarted!: () => void;
