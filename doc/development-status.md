@@ -21,7 +21,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 | Docker runtime | Smoke passed using existing sudo permission; non-root image, read-only root, capability removal, persistent restart verified |
 | Deployment config validation | Caddy validate and Prometheus config/four-rule checks passed in containers |
 | Local TLS proxy runtime | Trusted local CA, HTTPS RPC/CORS/auth, WSS handshake, SPA fallback and metrics 404 checked; smoke caught and fixed a routing-order defect |
-| Monitoring runtime | Disposable monitoring smoke passed: live scrape, Grafana datasource/dashboard, node-down alert firing; resources cleaned |
+| Monitoring runtime | Disposable monitoring smoke passed: live scrape, Grafana datasource/dashboard, Alertmanager firing and resolved webhook delivery; resources cleaned |
 
 ## Delivered, environment acceptance still required
 
@@ -30,7 +30,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 | TLS proxy | Caddy SPA/RPC/WebSocket configuration; forwarding chain overwrite; metrics exclusion | Validate Caddy and certificates on deployment host, public DNS, HTTPS/WebSocket connectivity |
 | Monitoring | Prometheus scrape/rules and Grafana provisioning verified in running containers | Configure/test organization-specific Alertmanager receivers and staging persistence |
 | Docker | Hardened image/Compose/runtime smoke verified locally via sudo | Repeat on the target deployment host |
-| Remote CI | Existing checks plus deployment-config validation job | CI is active; run 37912972291 passed five jobs but failed Web E2E. CI-mode local E2E passed 48/48; inspect remote logs and confirm a new run before acceptance |
+| Remote CI | Existing checks plus deployment-config validation job | Run 37914860649 for commit 9069efc completed successfully; confirm the matching run for subsequent commits |
 | Long-duration/resource acceptance | Configurable soak (seconds/connections), run instructions | Hour/day runs and RSS/CPU/disk growth measurements on staging hardware |
 | Disk/power-loss acceptance | Deterministic storage/RPC failure tests plus real temporary-path obstruction | ENOSPC, interrupted filesystem writes and host power loss on disposable infrastructure |
 
@@ -40,7 +40,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 - Current Rust suite includes monitoring/TLS deployment contracts (87 tests total).
 - Rust fmt/check/clippy, Web build, shell syntax, RPC smoke, YAML/JSON parsing and monitoring Compose parse passed.
 - Counts are the handoff baseline; use actual test output if more tests are added.
-- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed: Web E2E failed in run 37912972291; all other jobs succeeded. Fixed-account reuse was reproduced on repeat execution, and a stale SUCCESS assertion race was repaired. The signed-transaction file passed two consecutive CI-mode runs (38 cases). Independent tests no longer share serial retry grouping; native stdout is preserved in failure artifacts. Matching remote results remain required.
+- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI passed for commit 9069efc (run 37914860649), including Web E2E after fixing account reuse/stale receipt assertions. Independent tests no longer share serial retry grouping; native stdout is preserved in failure artifacts. Subsequent commits require their own matching remote results.
 
 ## Explicitly deferred
 

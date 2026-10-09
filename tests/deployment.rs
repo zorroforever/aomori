@@ -235,6 +235,10 @@ fn monitoring_smoke_checks_runtime_provisioning_and_alert_firing() {
         "api/datasources/uid/aomori-prometheus/health",
         "AomoriNodeUnavailable",
         ".state == \"firing\"",
+        "wait_notification firing",
+        "wait_notification resolved",
+        "prom/alertmanager:v0.28.1",
+        "send_resolved: true",
     ] {
         assert!(
             smoke.contains(required),

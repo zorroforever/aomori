@@ -87,6 +87,7 @@ jobs:
         with:
           node-version: 22
       - run: ./scripts/rpc-smoke.sh
+      - run: python3 scripts/test_alert_webhook.py
       - run: ./scripts/monitoring-smoke.sh
       - run: ./scripts/tls-smoke.sh
 
