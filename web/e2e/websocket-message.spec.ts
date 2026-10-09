@@ -21,6 +21,38 @@ test('deduplicates repeated event ids while keeping later events visible', async
   await expect(page.locator('#eventList .event-id').filter({ hasText: '#900002' })).toHaveCount(1);
 });
 
+test('clears old events and replays from zero after the node cursor rolls back', async ({ page }) => {
+  let restarted = false;
+  let requestRecovery!: () => void;
+  const cursors: number[] = [];
+  await page.route('http://127.0.0.1:18093/rpc', async route => {
+    const request = route.request().postDataJSON();
+    if (request.method !== 'aomori_get_events') return route.continue();
+    const since = request.params.since;
+    cursors.push(since);
+    const id = restarted ? 960001 : 960010;
+    const events = since < id ? [{ id, head: id, kind: restarted ? 'restored_world' : 'previous_world', data: {} }] : [];
+    await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: { events, next: events.length ? id : since, latest: id } } });
+  });
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    const server = ws.connectToServer();
+    server.onMessage(() => undefined);
+    requestRecovery = () => ws.send(JSON.stringify({ type: 'event_stream_lagged', missed: 1, last_event_id: 960001 }));
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await expect(page.locator('#eventList')).toContainText('previous_world');
+  restarted = true;
+  requestRecovery();
+  await expect(page.locator('#eventList')).toContainText('restored_world');
+  await expect(page.locator('#eventList')).not.toContainText('previous_world');
+  await expect(page.locator('#eventList .event')).toHaveCount(1);
+  await expect(page.locator('#eventCount')).toHaveText('1');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('960001');
+  expect(cursors).toEqual([0, 960010, 0]);
+});
+
 test('retains only the latest 200 events without moving the cursor backwards', async ({ page }) => {
   let sendEvents!: () => void;
   await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
