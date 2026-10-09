@@ -220,6 +220,28 @@ fn restart_smoke_covers_crash_and_offline_restore_without_secret_output() {
     assert!(!RPC_SMOKE.contains("set -x"));
 }
 
+#[test]
+fn monitoring_smoke_checks_runtime_provisioning_and_alert_firing() {
+    let smoke = include_str!("../scripts/monitoring-smoke.sh");
+    for required in [
+        "mktemp -d",
+        "down --volumes --remove-orphans",
+        "chmod 600",
+        "127.0.0.1:$prom_port",
+        "api/dashboards/uid/aomori-node",
+        "api/datasources/uid/aomori-prometheus/health",
+        "AomoriNodeUnavailable",
+        ".state == \"firing\"",
+    ] {
+        assert!(
+            smoke.contains(required),
+            "missing monitoring check: {required}"
+        );
+    }
+    assert!(!smoke.contains("set -x"));
+    assert!(CI.contains("./scripts/monitoring-smoke.sh"));
+}
+
 fn service_directives(contents: &str) -> BTreeMap<&str, &str> {
     contents
         .lines()

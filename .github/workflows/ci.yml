@@ -78,6 +78,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked
       - run: ./scripts/rpc-smoke.sh
+      - run: ./scripts/monitoring-smoke.sh
 
   deployment-config:
     name: Deployment configuration

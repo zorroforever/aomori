@@ -33,6 +33,8 @@ Rules cover scrape failures, snapshot failures, event lag, and elevated RPC erro
 
 Validate rules with `promtool check config` and `promtool check rules`, or the CI configuration-validation job. A local Compose parse does not verify running Grafana/Prometheus.
 
+After `cargo build --locked`, run `./scripts/monitoring-smoke.sh` on a Docker-capable Linux host (use `sudo -n bash scripts/monitoring-smoke.sh` if required by local Docker permissions). It uses a disposable node, random Grafana credentials, dedicated Compose project/volumes and loopback ports 28095/29090/23000; override them via `AOMORI_MONITOR_NODE_PORT`, `AOMORI_MONITOR_PROM_PORT`, `AOMORI_MONITOR_GRAF_PORT`. It checks live scraping, rule loading, datasource/dashboard provisioning and node-down alert firing, then cleans up. The test takes around two minutes once images are cached and is included in CI. It does not send notifications. See [local evidence](../doc/acceptance-local.md).
+
 ## Restart, crash and offline restore drill
 
 ```bash

@@ -13,19 +13,22 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 | Bounded visible logs and unsafe event cursor rejection | Logs retain 500 rows; visible events/buffer 200 entries |
 | Browser connected to a real restarting node | Isolated node SIGKILL, automatic WebSocket reconnect, second signed transaction, cursor/root checks |
 | Concurrent read/connection baseline | Five-second regular gate, 32 simultaneous sockets, 16-request batches |
-| Opt-in sustained concurrency | Local 60-second run with 100 simultaneous sockets passed; sockets established sequentially to avoid browser handshake throttling |
+| Opt-in sustained concurrency | Local 180-second run with 100 simultaneous sockets passed; RSS/CPU/snapshot samples in [local acceptance record](acceptance-local.md); not an hour/day guarantee |
 | Normal restart and acknowledged-write SIGKILL recovery | RPC smoke verifies root, account nonce, events, receipts and default auth policy |
 | Offline full-directory backup restore | RPC smoke verifies matching state and exclusion of post-backup writes |
 | Filesystem write failure and retry | RPC smoke blocks the snapshot temporary path in a disposable directory, verifies rollback and retry |
 | README/documentation language navigation and accurate prototype positioning | English, Chinese and Japanese README/navigation |
+| Docker runtime | Smoke passed using existing sudo permission; non-root image, read-only root, capability removal, persistent restart verified |
+| Deployment config validation | Caddy validate and Prometheus config/four-rule checks passed in containers |
+| Monitoring runtime | Disposable monitoring smoke passed: live scrape, Grafana datasource/dashboard, node-down alert firing; resources cleaned |
 
 ## Delivered, environment acceptance still required
 
 | Area | Delivered | Remaining acceptance |
 | --- | --- | --- |
 | TLS proxy | Caddy SPA/RPC/WebSocket configuration; forwarding chain overwrite; metrics exclusion | Validate Caddy and certificates on deployment host, public DNS, HTTPS/WebSocket connectivity |
-| Monitoring | Prometheus scrape/rules, Grafana provisioning and eight-panel dashboard, loopback-only services | Run containers, inspect datasource/dashboard and configure/test organization-specific Alertmanager receivers |
-| Docker | Existing hardened node image/Compose/smoke plus monitoring Compose | Local Docker daemon unavailable; runtime smoke and config validators cannot run here |
+| Monitoring | Prometheus scrape/rules and Grafana provisioning verified in running containers | Configure/test organization-specific Alertmanager receivers and staging persistence |
+| Docker | Hardened image/Compose/runtime smoke verified locally via sudo | Repeat on the target deployment host |
 | Remote CI | Existing checks plus deployment-config validation job | GitHub API reported CI `disabled_manually`; owner must enable workflow, trigger a run and confirm the matching commit's checks |
 | Long-duration/resource acceptance | Configurable soak (seconds/connections), run instructions | Hour/day runs and RSS/CPU/disk growth measurements on staging hardware |
 | Disk/power-loss acceptance | Deterministic storage/RPC failure tests plus real temporary-path obstruction | ENOSPC, interrupted filesystem writes and host power loss on disposable infrastructure |
@@ -33,10 +36,10 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 ## Verification at this handoff
 
 - Final full Web E2E: 48 tests passed locally, including sequential socket establishment. A separate 100-socket/60-second run also passed.
-- Rust: 85 tests passed locally, including deployment configuration contracts.
+- Previous handoff Rust baseline: 85 tests passed; this closure adds a monitoring smoke contract test (86 total).
 - Rust fmt/check/clippy, Web build, shell syntax, RPC smoke, YAML/JSON parsing and monitoring Compose parse passed.
 - Counts are the handoff baseline; use actual test output if more tests are added.
-- Docker runtime/config validation and remote CI are **not** marked passed.
+- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed (workflow manually disabled).
 
 ## Explicitly deferred
 
