@@ -20,6 +20,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 | README/documentation language navigation and accurate prototype positioning | English, Chinese and Japanese README/navigation |
 | Docker runtime | Smoke passed using existing sudo permission; non-root image, read-only root, capability removal, persistent restart verified |
 | Deployment config validation | Caddy validate and Prometheus config/four-rule checks passed in containers |
+| Local TLS proxy runtime | Trusted local CA, HTTPS RPC/CORS/auth, WSS handshake, SPA fallback and metrics 404 checked; smoke caught and fixed a routing-order defect |
 | Monitoring runtime | Disposable monitoring smoke passed: live scrape, Grafana datasource/dashboard, node-down alert firing; resources cleaned |
 
 ## Delivered, environment acceptance still required
@@ -29,17 +30,17 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 | TLS proxy | Caddy SPA/RPC/WebSocket configuration; forwarding chain overwrite; metrics exclusion | Validate Caddy and certificates on deployment host, public DNS, HTTPS/WebSocket connectivity |
 | Monitoring | Prometheus scrape/rules and Grafana provisioning verified in running containers | Configure/test organization-specific Alertmanager receivers and staging persistence |
 | Docker | Hardened image/Compose/runtime smoke verified locally via sudo | Repeat on the target deployment host |
-| Remote CI | Existing checks plus deployment-config validation job | CI has been re-enabled (`active` confirmed by GitHub API); trigger a run and confirm the matching commit's checks |
+| Remote CI | Existing checks plus deployment-config validation job | CI is active; run 37912972291 passed five jobs but failed Web E2E. CI-mode local E2E passed 48/48; inspect remote logs and confirm a new run before acceptance |
 | Long-duration/resource acceptance | Configurable soak (seconds/connections), run instructions | Hour/day runs and RSS/CPU/disk growth measurements on staging hardware |
 | Disk/power-loss acceptance | Deterministic storage/RPC failure tests plus real temporary-path obstruction | ENOSPC, interrupted filesystem writes and host power loss on disposable infrastructure |
 
 ## Verification at this handoff
 
 - Final full Web E2E: 48 tests passed locally, including sequential socket establishment. A separate 100-socket/60-second run also passed.
-- Previous handoff Rust baseline: 85 tests passed; this closure adds a monitoring smoke contract test (86 total).
+- Current Rust suite includes monitoring/TLS deployment contracts (87 tests total).
 - Rust fmt/check/clippy, Web build, shell syntax, RPC smoke, YAML/JSON parsing and monitoring Compose parse passed.
 - Counts are the handoff baseline; use actual test output if more tests are added.
-- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed; the workflow is active again, but the matching commit's results must be checked.
+- Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI remains **not** passed: Web E2E failed in run 37912972291; all other jobs succeeded. The failure output is not available from anonymous APIs. CI-mode local E2E passed 48/48, and native stdout is now also preserved in failure artifacts.
 
 ## Explicitly deferred
 

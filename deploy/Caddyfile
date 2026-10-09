@@ -12,7 +12,9 @@
 
 	# Monitoring stays on loopback; do not publish world/metrics endpoints.
 	@metrics path /metrics /metrics/*
-	respond @metrics 404
+	handle @metrics {
+		respond 404
+	}
 
 	@node path /rpc /events /health /ready
 	handle @node {

@@ -11,6 +11,8 @@ These are deployment examples for an experimental runtime, not a claim of produc
 5. Validate before reload: `AOMORI_DOMAIN=mud.example.com caddy validate --config deploy/Caddyfile --adapter caddyfile`.
 6. Check HTTPS `/health`, `/ready`, JSON-RPC `/rpc`, and WebSocket `/events`. Public `/metrics` and `/metrics/prometheus` must return 404. Do not expose the direct node port.
 
+Run `./scripts/tls-smoke.sh` after building the node, with Docker and Node 22+ available (or `sudo -n env PATH="$PATH" bash scripts/tls-smoke.sh` when Docker requires sudo). It uses the actual Caddy example with disposable local certificates, ports and static files. Certificate verification remains enabled. It checks HTTPS RPC/CORS/auth, SPA fallback, metrics 404 and WSS handshake; `AOMORI_TLS_NODE_PORT` and `AOMORI_TLS_PORT` override default loopback ports 28096/28443. This does not validate public DNS or public certificate issuance.
+
 The proxy overwrites client forwarding headers, serves the SPA, and excludes monitoring endpoints. It does not add user authentication; admin RPC still requires the node token. Never embed the token in the Web build. No public DNS/certificate deployment has been verified in the development workspace.
 
 ## Monitoring (same Linux host)

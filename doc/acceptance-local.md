@@ -18,6 +18,12 @@ All passed. Caddy reported an advisory about the explicit forwarding header; it 
 
 The node Docker smoke checked runtime UID, read-only root filesystem, dropped capabilities, writable snapshot and unchanged snapshot across container restart. The monitoring smoke checked a real node scrape (`up == 1`), four loaded rules, eight provisioned Grafana panels and a healthy datasource. After the node stopped, `AomoriNodeUnavailable` became `firing`. It did not send a notification. Temporary nodes, Compose containers and volumes were removed.
 
+## Local TLS proxy runtime
+
+`sudo -n env PATH="$PATH" bash scripts/tls-smoke.sh` passed with a temporary Caddy internal CA. Both curl and Node trusted the copied root certificate; certificate verification was never disabled. Checks covered HTTPS RPC, allowed-origin CORS, unauthenticated admin-write rejection, SPA routing, WSS handshake and HTTP 404 for both monitoring paths.
+
+The first run caught a real routing-order defect: a standalone `respond @metrics` was bypassed by the SPA fallback and returned HTML with status 200. The metrics rejection now has its own `handle @metrics` branch; the runtime test passes and is part of CI. Public certificate issuance remains unverified.
+
 ## Three-minute read/connection resource baseline
 
 ```bash
@@ -39,4 +45,4 @@ The node PID was sampled using `ps -p PID -o rss=,%cpu=` every five seconds; sna
 
 ## Remaining external closure
 
-GitHub's workflow API now reports CI as `active`, after the owner re-enabled it. No remote CI pass is claimed until a run for the final commit completes successfully. A new push or manual workflow dispatch can trigger that run. Actual TLS/DNS, organization notification receivers, long-duration staging resource measurements and destructive fault drills remain separate acceptance items.
+GitHub's workflow API now reports CI as `active`, after the owner re-enabled it. Run 37912972291 passed Rust, Web build, Docker, deployment config and RPC/monitoring smoke, but failed Web E2E. No overall remote CI pass is claimed. CI-mode local E2E passed 48/48; native test stdout is now captured in failure artifacts for diagnosis. A new push or manual workflow dispatch can trigger that run. Actual TLS/DNS, organization notification receivers, long-duration staging resource measurements and destructive fault drills remain separate acceptance items.

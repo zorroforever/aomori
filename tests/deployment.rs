@@ -172,7 +172,8 @@ fn proxy_and_monitoring_examples_keep_private_endpoints_private() {
         "reverse_proxy 127.0.0.1:8091",
         "header_up X-Forwarded-For {remote_host}",
         "@metrics path /metrics /metrics/*",
-        "respond @metrics 404",
+        "handle @metrics",
+        "respond 404",
     ] {
         assert!(
             proxy.contains(required),
@@ -240,6 +241,25 @@ fn monitoring_smoke_checks_runtime_provisioning_and_alert_firing() {
     }
     assert!(!smoke.contains("set -x"));
     assert!(CI.contains("./scripts/monitoring-smoke.sh"));
+}
+
+#[test]
+fn tls_smoke_verifies_certificates_and_metrics_isolation() {
+    let smoke = include_str!("../scripts/tls-smoke.sh");
+    for required in [
+        "--cacert",
+        "tls internal",
+        "NODE_EXTRA_CA_CERTS",
+        "wss://localhost",
+        "/metrics /metrics/prometheus",
+        "== 404",
+        "docker rm -f",
+    ] {
+        assert!(smoke.contains(required), "missing TLS check: {required}");
+    }
+    assert!(CI.contains("./scripts/tls-smoke.sh"));
+    assert!(CI.contains("set -o pipefail"));
+    assert!(CI.contains("web/e2e-output.log"));
 }
 
 fn service_directives(contents: &str) -> BTreeMap<&str, &str> {
