@@ -236,6 +236,9 @@ async function rpc(method: string, params: object, adminToken?: string, targetRp
       state.rpcRequests.delete(controller);
     }
     if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
+    if (response.status === 502 || response.status === 503) {
+      throw new RpcTransportError(`节点暂时不可用（HTTP ${response.status}）`);
+    }
     let body: RpcResult;
     try {
       body = await response.json();

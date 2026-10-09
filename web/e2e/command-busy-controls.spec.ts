@@ -4,6 +4,7 @@ test('locks command controls while look is pending', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '连接节点' }).click();
   await expect(page.locator('#statusText')).toHaveText('节点在线');
+  await expect(page.getByRole('button', { name: '连接节点' })).toBeEnabled();
 
   let lookRequests = 0;
   let releaseLook!: () => void;
