@@ -122,6 +122,59 @@ test('reconnects and replays events when the recovery buffer fills up', async ({
   await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('950205');
 });
 
+test('replays multiple event pages before releasing buffered live events', async ({ page }) => {
+  const base = 970000;
+  const cursors: number[] = [];
+  let sendLive!: () => void;
+  let secondPageStarted!: () => void;
+  let releaseSecondPage!: () => void;
+  const secondPage = new Promise<void>(resolve => { secondPageStarted = resolve; });
+  const secondPageRelease = new Promise<void>(resolve => { releaseSecondPage = resolve; });
+  await page.route('http://127.0.0.1:18093/rpc', async route => {
+    const request = route.request().postDataJSON();
+    if (request.method !== 'aomori_get_events') return route.continue();
+    const since = request.params.since;
+    cursors.push(since);
+    expect(request.params.limit).toBe(500);
+    if (since === base + 500) {
+      secondPageStarted();
+      await secondPageRelease;
+    }
+    const first = Math.max(base + 1, since + 1);
+    const last = Math.min(first + 499, base + 1005);
+    const events = Array.from({ length: Math.max(0, last - first + 1) }, (_, index) => ({
+      id: first + index, head: first + index, kind: 'paged_history', data: {},
+    }));
+    await route.fulfill({ status: 200, json: { jsonrpc: '2.0', id: request.id, result: {
+      events, next: events.length ? last : since, latest: base + 1005,
+    } } });
+  });
+  await page.routeWebSocket('ws://127.0.0.1:18093/events', ws => {
+    const server = ws.connectToServer();
+    server.onMessage(() => undefined);
+    sendLive = () => {
+      ws.send(JSON.stringify({ id: base + 1006, head: base + 1006, kind: 'after_paged_history', data: {} }));
+      ws.send(JSON.stringify({ id: base + 1005, head: base + 1005, kind: 'history_duplicate', data: {} }));
+    };
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '连接节点' }).click();
+  await secondPage;
+  sendLive();
+  await page.waitForTimeout(100);
+  await expect(page.locator('#eventList')).not.toContainText('after_paged_history');
+  releaseSecondPage();
+  await expect(page.locator('#eventList')).toContainText('after_paged_history');
+  expect(cursors).toEqual([0, base + 500, base + 1000]);
+  await expect(page.locator('#eventList .event')).toHaveCount(200);
+  await expect(page.locator('#eventCount')).toHaveText('200');
+  await expect(page.locator('#eventList .event-id').first()).toHaveText('#971006');
+  await expect(page.locator('#eventList .event-id').last()).toHaveText('#970807');
+  await expect(page.locator('#eventList')).not.toContainText('history_duplicate');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('aomori:event-cursor:http://127.0.0.1:18093'))).toBe('971006');
+});
+
 test('renders recovered events before live events received during compensation', async ({ page }) => {
   let releaseRecovery!: () => void;
   let recoveryStarted!: () => void;
