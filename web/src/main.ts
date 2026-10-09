@@ -222,8 +222,19 @@ async function rpc(method: string, params: object, adminToken?: string, targetRp
     state.rpcRequests.add(controller);
     const timeout = window.setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
     let response: Response;
+    let body: RpcResult;
     try {
       response = await fetch(`${requestRpc}/rpc`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }), signal: controller.signal });
+      if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
+      if (response.status === 502 || response.status === 503) {
+        throw new RpcTransportError(`节点暂时不可用（HTTP ${response.status}）`);
+      }
+      try {
+        body = await response.json();
+      } catch (error) {
+        if ((error as Error).name === 'AbortError' || error instanceof TypeError) throw error;
+        throw new RpcError(response.ok ? '节点返回了无效响应' : `HTTP ${response.status}`);
+      }
     } catch (error) {
       if ((error as DOMException).name === 'AbortError') {
         if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
@@ -236,15 +247,6 @@ async function rpc(method: string, params: object, adminToken?: string, targetRp
       state.rpcRequests.delete(controller);
     }
     if (requestGeneration >= 0 && (requestGeneration !== state.rpcGeneration || requestRpc !== state.rpc)) throw new StaleRpcResponse();
-    if (response.status === 502 || response.status === 503) {
-      throw new RpcTransportError(`节点暂时不可用（HTTP ${response.status}）`);
-    }
-    let body: RpcResult;
-    try {
-      body = await response.json();
-    } catch {
-      throw new RpcError(response.ok ? '节点返回了无效响应' : `HTTP ${response.status}`);
-    }
     const retryAfterMs = Number(body.error?.data?.retry_after_ms);
     if (response.status === 429 && body.error?.code === -32004 && readMethods.has(method) && attempt === 0) {
       const headerSeconds = Number(response.headers.get('retry-after'));
