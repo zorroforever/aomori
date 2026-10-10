@@ -10,6 +10,7 @@
 | Operations guide | [Operations guide](operations.md) | 中文源文档 | 中文源文档 |
 | MVP scope | [MVP scope](mvp.md) | 中文源文档 | 中文源文档 |
 | Product requirements | [Product requirements](prd.md) | 中文源文档 | 中文源文档 |
+| Single-node ledger design (draft, not implemented) | Chinese source | [设计草案](single-node-ledger-design.md) | Chinese source |
 | Contracts and demo scripts | [Contracts](../contracts/) | Source files | Source files |
 
 The repository currently maintains one canonical version of each technical document. The language labels above identify the source language so that readers do not mistake an untranslated document for a localized version. The README navigation is available in all three languages, and localized technical documents can be added without changing the project links.
