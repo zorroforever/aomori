@@ -153,6 +153,29 @@ pub fn execute_with_limits(
     command: bool,
     limits: LuaLimits,
 ) -> Result<Receipt> {
+    execute_internal(state, entity_id, action, args, command, limits, false)
+}
+
+/// Restricted experimental execution path for the ledger; legacy behavior unchanged.
+pub fn execute_ledger_command(
+    state: &mut WorldState,
+    entity_id: EntityId,
+    action: &str,
+    args: Value,
+    limits: LuaLimits,
+) -> Result<Receipt> {
+    execute_internal(state, entity_id, action, args, true, limits, true)
+}
+
+fn execute_internal(
+    state: &mut WorldState,
+    entity_id: EntityId,
+    action: &str,
+    args: Value,
+    command: bool,
+    limits: LuaLimits,
+    ledger: bool,
+) -> Result<Receipt> {
     let original = state.clone();
     let entity = state
         .entities
@@ -196,6 +219,34 @@ pub fn execute_with_limits(
         },
     )
     .map_err(|e| anyhow!("lua execution limit setup: {e}"))?;
+    if ledger {
+        let globals = lua.globals();
+        for name in [
+            "os",
+            "io",
+            "package",
+            "require",
+            "debug",
+            "dofile",
+            "loadfile",
+            "load",
+            "collectgarbage",
+            "pairs",
+            "next",
+            "tostring",
+        ] {
+            globals
+                .set(name, LuaValue::Nil)
+                .map_err(|e| anyhow!("ledger sandbox: {e}"))?;
+        }
+        let math: mlua::Table = globals
+            .get("math")
+            .map_err(|e| anyhow!("ledger sandbox: {e}"))?;
+        for name in ["random", "randomseed"] {
+            math.set(name, LuaValue::Nil)
+                .map_err(|e| anyhow!("ledger sandbox: {e}"))?;
+        }
+    }
     install(&lua, ctx).map_err(|e| anyhow!("lua host setup: {e}"))?;
     lua.load(&source)
         .set_name(&contract_name)
