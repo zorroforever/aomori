@@ -17,18 +17,22 @@ def main():
     parser.add_argument('--seconds', type=int, default=10)
     parser.add_argument('--readers', type=int, default=8)
     parser.add_argument('--interval', type=float, default=0.5, help='Seconds between write batches')
+    parser.add_argument('--max-rss-mib', type=int, help='Fail when sampled node RSS exceeds this positive budget')
+    parser.add_argument('--max-snapshot-mib', type=int, help='Fail when sampled primary snapshot exceeds this positive budget')
     parser.add_argument('--report', type=Path, required=True, help='New JSON report path; never overwrite')
     parser.add_argument('--binary', type=Path, default=Path(__file__).resolve().parents[1] / 'target/debug/aomori')
     args = parser.parse_args()
     if not 1 <= args.seconds <= 86400 or not 1 <= args.readers <= 32 or not 0.1 <= args.interval <= 60:
         parser.error('seconds: 1..86400, readers: 1..32, interval: 0.1..60')
+    if any(value is not None and value <= 0 for value in (args.max_rss_mib, args.max_snapshot_mib)):
+        parser.error('resource budgets must be positive integers')
     binary = args.binary.resolve()
     if not binary.is_file():
         parser.error('Build the node first')
     # Reserve the report before starting; a failed run cannot masquerade as a pass.
     with args.report.open('x') as output:
         json.dump({'status': 'running'}, output)
-    report = {'status': 'failed', 'settings': {'seconds': args.seconds, 'readers': args.readers, 'interval': args.interval}, 'samples': []}
+    report = {'status': 'failed', 'settings': {'seconds': args.seconds, 'readers': args.readers, 'interval': args.interval, 'max_rss_mib': args.max_rss_mib, 'max_snapshot_mib': args.max_snapshot_mib}, 'samples': []}
     process = None
     try:
         with tempfile.TemporaryDirectory(prefix='aomori-soak-') as directory:
@@ -82,7 +86,12 @@ def main():
                 # utime/stime start at positions 14/15; comm can contain spaces.
                 fields = Path(f'/proc/{process.pid}/stat').read_text().rsplit(')', 1)[1].split()
                 cpu = (int(fields[11]) + int(fields[12])) / os.sysconf('SC_CLK_TCK')
-                report['samples'].append({'elapsed_seconds': round(elapsed, 3), 'rss_kib': rss, 'cpu_seconds': cpu, 'snapshot_bytes': (data / 'state.json').stat().st_size})
+                snapshot_bytes = (data / 'state.json').stat().st_size
+                report['samples'].append({'elapsed_seconds': round(elapsed, 3), 'rss_kib': rss, 'cpu_seconds': cpu, 'snapshot_bytes': snapshot_bytes})
+                if args.max_rss_mib is not None and rss > args.max_rss_mib * 1024:
+                    raise RuntimeError(f'RSS budget exceeded: {rss} KiB > {args.max_rss_mib} MiB')
+                if args.max_snapshot_mib is not None and snapshot_bytes > args.max_snapshot_mib * 1024 * 1024:
+                    raise RuntimeError(f'Snapshot budget exceeded: {snapshot_bytes} bytes > {args.max_snapshot_mib} MiB')
 
             try:
                 start()
@@ -110,6 +119,7 @@ def main():
                                 raise RuntimeError('Read observed inconsistent state')
                             reads += 1
                         max_batch_ms = max(max_batch_ms, (time.monotonic() - batch_started) * 1000)
+                        report.update(writes=writes, concurrent_reads=reads, max_batch_ms=round(max_batch_ms, 3))
                         elapsed = time.monotonic() - started
                         if elapsed >= next_sample:
                             sample(elapsed)
@@ -147,10 +157,19 @@ def main():
             finally:
                 stop()
                 logs.close()
-    except Exception as error:
-        report['error'] = str(error)
+    except (Exception, KeyboardInterrupt) as error:
+        report['error'] = str(error) or type(error).__name__
         raise
     finally:
+        samples = report['samples']
+        if samples:
+            report['resource_summary'] = {
+                'sample_count': len(samples),
+                'peak_rss_kib': max(item['rss_kib'] for item in samples),
+                'peak_snapshot_bytes': max(item['snapshot_bytes'] for item in samples),
+                'rss_growth_kib': samples[-1]['rss_kib'] - samples[0]['rss_kib'],
+                'snapshot_growth_bytes': samples[-1]['snapshot_bytes'] - samples[0]['snapshot_bytes'],
+            }
         args.report.write_text(json.dumps(report, indent=2) + '\n')
     print(f'Soak passed: {report["writes"]} writes, {report["concurrent_reads"]} concurrent reads; report: {args.report}')
 

@@ -87,6 +87,7 @@ jobs:
         with:
           node-version: 22
       - run: ./scripts/rpc-smoke.sh
+      - run: python3 scripts/test_runtime_soak.py
       - run: python3 scripts/runtime-soak.py --seconds 10 --report runtime-soak.json
       - if: always()
         uses: actions/upload-artifact@v6

@@ -304,6 +304,9 @@ fn runtime_soak_checks_concurrent_reads_and_restart_evidence() {
         "args.report.open('x')",
         "'status': 'failed'",
         "Event replay count mismatch",
+        "RSS budget exceeded",
+        "Snapshot budget exceeded",
+        "resource_summary",
     ] {
         assert!(soak.contains(required), "missing soak check: {required}");
     }
