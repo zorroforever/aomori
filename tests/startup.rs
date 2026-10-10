@@ -108,6 +108,93 @@ fn binary_startup_migrates_legacy_demo_and_becomes_ready() {
     assert_eq!(loaded.world.entities[&5].location, Some(4));
 }
 
+#[test]
+fn binary_recovers_missing_primary_and_keeps_recovered_state_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = SnapshotStore::new(dir.path()).unwrap();
+    let mut state = WorldState::genesis();
+    state.head = 7;
+    let expected_root = state.root();
+    store.save(&state).unwrap();
+    state.head = 8;
+    store.save(&state).unwrap();
+    fs::remove_file(store.path()).unwrap();
+    fs::write(store.path().with_extension("json.tmp"), b"{\"state\":").unwrap();
+
+    for _ in 0..2 {
+        let address = available_address();
+        let child = Command::new(env!("CARGO_BIN_EXE_aomori"))
+            .args([
+                "--listen",
+                &address.to_string(),
+                "--data-dir",
+                dir.path().to_str().unwrap(),
+            ])
+            .env_remove("AOMORI_ADMIN_TOKEN")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut child = ChildGuard(Some(child));
+        let response = wait_until_ready(&mut child, address);
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.head, 7);
+        assert_eq!(loaded.root(), expected_root);
+        let output = child.stop();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let logs: Vec<Value> = stderr
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        assert!(
+            logs.iter().any(|entry| entry["type"] == "state_loaded"
+                && entry["head"] == 7
+                && entry["state_root"] == expected_root),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn binary_rejects_invalid_backup_without_initializing_a_new_world() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("state.json.bak"), b"{").unwrap();
+    let child = Command::new(env!("CARGO_BIN_EXE_aomori"))
+        .args([
+            "--listen",
+            &available_address().to_string(),
+            "--data-dir",
+            dir.path().to_str().unwrap(),
+            "--demo",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child = ChildGuard(Some(child));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.child_mut().try_wait().unwrap() {
+            assert!(!status.success());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "invalid backup did not prevent startup"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    let output = child.stop();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("primary snapshot missing; invalid backup"),
+        "{stderr}"
+    );
+    assert!(!dir.path().join("state.json").exists());
+    assert_eq!(fs::read(dir.path().join("state.json.bak")).unwrap(), b"{");
+}
+
 fn available_address() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap()
