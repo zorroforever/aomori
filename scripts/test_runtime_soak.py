@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Integration tests of soak reporting and resource-budget failure semantics."""
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
@@ -10,6 +11,37 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts/runtime-soak.py'
 BINARY = ROOT / 'target/debug/aomori'
+
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('runtime_soak', SCRIPT)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class EventReplayTests(unittest.TestCase):
+    def replay(self, pages):
+        iterator = iter(pages)
+        return module.replay_events(lambda *_: next(iterator))
+
+    def test_digest_is_independent_of_pagination_and_object_key_order(self):
+        a = {'id': 1, 'data': {'a': 1, 'b': 2}}
+        b = {'id': 2, 'data': {}}
+        whole = self.replay([{'events': [a, b], 'latest': 2}])
+        split = self.replay([{'events': [{'data': {'b': 2, 'a': 1}, 'id': 1}], 'latest': 2}, {'events': [b], 'latest': 2}])
+        self.assertEqual(whole, split)
+        changed = self.replay([{'events': [{'id': 1, 'data': {'a': 3}}, b], 'latest': 2}])
+        self.assertNotEqual(whole[2], changed[2])
+
+    def test_gaps_duplicates_and_invalid_latest_fail(self):
+        for page in [
+            {'events': [{'id': 2}], 'latest': 2},
+            {'events': [{'id': 1}, {'id': 1}], 'latest': 1},
+            {'events': [], 'latest': 1},
+            {'events': [{'id': 1}], 'latest': 0},
+        ]:
+            with self.subTest(page=page), self.assertRaises(RuntimeError):
+                self.replay([page])
 
 
 @unittest.skipUnless(BINARY.is_file(), 'Build the node before running integration tests')
@@ -25,6 +57,8 @@ class SoakTests(unittest.TestCase):
             report = json.loads(path.read_text())
             self.assertEqual(report['status'], 'passed')
             self.assertTrue(report['restart_verified'])
+            self.assertEqual(len(report['event_history_sha256']), 64)
+            self.assertGreater(report['receipts_checked'], 0)
             self.assertGreater(report['writes'], 0)
             self.assertEqual(report['concurrent_reads'], report['writes'] * 2)
             self.assertGreater(report['resource_summary']['peak_rss_kib'], 0)

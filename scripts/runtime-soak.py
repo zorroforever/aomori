@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import hashlib
 import os
 from pathlib import Path
 import socket
@@ -10,6 +11,27 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+
+
+def replay_events(rpc):
+    """Hash every event in order without retaining the full history in memory."""
+    cursor = count = 0
+    digest = hashlib.sha256()
+    while True:
+        page = rpc('aomori_get_events', {'since': cursor, 'limit': 500})
+        for event in page['events']:
+            if event['id'] != cursor + 1:
+                raise RuntimeError('Event history gap or duplicate')
+            cursor = event['id']
+            count += 1
+            digest.update(json.dumps(event, sort_keys=True, separators=(',', ':')).encode())
+            digest.update(b'\n')
+        if cursor >= page['latest']:
+            if cursor != page['latest']:
+                raise RuntimeError('Event exceeds advertised latest cursor')
+            return cursor, count, digest.hexdigest()
+        if not page['events']:
+            raise RuntimeError('History gap')
 
 
 def main():
@@ -97,6 +119,9 @@ def main():
                 start()
                 initial = rpc('aomori_get_info')
                 writes = reads = 0
+                # First receipt plus logarithmically spaced checkpoints keeps
+                # retained receipts bounded even during day-long runs.
+                checkpoints = []
                 max_batch_ms = 0
                 started = time.monotonic()
                 sample(0)
@@ -110,6 +135,8 @@ def main():
                         if not receipt['ok']:
                             raise RuntimeError('Transaction failed')
                         writes += 1
+                        if writes & (writes - 1) == 0:
+                            checkpoints.append(receipt)
                         after = rpc('aomori_get_info')
                         if after['head'] != before['head'] + 1 or after['state_root'] != receipt['state_root']:
                             raise RuntimeError('Write did not advance exactly one state')
@@ -132,26 +159,20 @@ def main():
                     raise RuntimeError('Final nonce/head mismatch')
                 # Replay full paginated history; do not confuse a 500-event page
                 # with the entire event log in hour/day runs.
-                cursor = count = 0
-                while True:
-                    page = rpc('aomori_get_events', {'since': cursor, 'limit': 500})
-                    for event in page['events']:
-                        if event['id'] <= cursor:
-                            raise RuntimeError('Event cursor did not advance')
-                        cursor = event['id']
-                        count += 1
-                    if cursor >= page['latest']:
-                        break
-                    if not page['events']:
-                        raise RuntimeError('History gap')
+                cursor, count, history_digest = replay_events(rpc)
+                if checkpoints[-1]['tx_id'] != receipt['tx_id']:
+                    checkpoints.append(receipt)
+                report.update(event_history_sha256=history_digest, receipts_checked=len(checkpoints))
                 if count != final['events']:
                     raise RuntimeError('Event replay count mismatch')
                 stop()
                 start()
-                restored_events = rpc('aomori_get_events', {'since': max(0, cursor - 1), 'limit': 500})
-                if restored_events['latest'] != cursor:
-                    raise RuntimeError('Restart changed event cursor')
-                if rpc('aomori_get_info') != final or rpc('aomori_get_account', {'name': 'admin'}) != account or rpc('aomori_get_receipt', {'tx_id': receipt['tx_id']}) != receipt:
+                if replay_events(rpc) != (cursor, count, history_digest):
+                    raise RuntimeError('Restart changed event history')
+                for checkpoint in checkpoints:
+                    if rpc('aomori_get_receipt', {'tx_id': checkpoint['tx_id']}) != checkpoint:
+                        raise RuntimeError('Restart changed checkpoint receipt')
+                if rpc('aomori_get_info') != final or rpc('aomori_get_account', {'name': 'admin'}) != account:
                     raise RuntimeError('Restart changed acknowledged state')
                 report.update(status='passed', writes=writes, concurrent_reads=reads, events_replayed=count, latest_event=cursor, elapsed_seconds=round(time.monotonic() - started, 3), max_batch_ms=round(max_batch_ms, 3), final_head=final['head'], final_state_root=final['state_root'], restart_verified=True)
             finally:
