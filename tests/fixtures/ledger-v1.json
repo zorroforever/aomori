@@ -1,0 +1,88 @@
+{
+  "codec": [
+    {
+      "value": {},
+      "canonical": "{}",
+      "hashes": {
+        "sign": "3b199726b0a426e5403a6c8a80ba98ff4ccb1325ab1d039ed27ddcee17556303",
+        "tx": "6e7b30ceb2e3074a51c85572acb66857901e01deb12b3f11b6043121dbb7c469",
+        "genesis": "c84a5f08e37280d86d98ef84e1ead945f9b0cde4f2ef82fbc67a5ce42fce376b",
+        "block": "0658d999746bfb40cdb801b9cc6f095597b640dbe408fd4f455043922c3c7c39",
+        "transactions": "e6480adde1cb471dc64143ba049fad9fd4e0cee80dbce9abd544c88454a23e68",
+        "results": "909a7b8883bf5876df4febb5730ca3f15e1d715c238c45648013b88cb0bbed9e",
+        "state": "f37551274e107036d59444fd5f6b59ff3bd58596eac34093c32a93dc45282b8e"
+      }
+    },
+    {
+      "value": {
+        "z": 1,
+        "a": [
+          null,
+          true,
+          "中\n\u0001",
+          -9007199254740991
+        ]
+      },
+      "canonical": "{\"a\":[null,true,\"中\\n\\u0001\",-9007199254740991],\"z\":1}",
+      "hashes": {
+        "sign": "ee9d63ad33eeee97e3487c88817974004e2616186884b490069b5077b184001f",
+        "tx": "017611c143768dbf0483340c982d5b7234a78cd0884ca324c668d3e72b8336e4",
+        "genesis": "67a8f49f9e5d3578ed6fdcee1cd19195368b9377249ba15d3dde7732301c7b61",
+        "block": "9edd1ad100bdfb6b111be3024db4fbd8ab74aca5a371b146b9132e10cecb6b50",
+        "transactions": "ac91a40cdb0c5193e917f1623f8eb21c51557501f3c535315a29c7bb8f187c2a",
+        "results": "d11a14bfa1db02b2c77078d707181ce0513e20763357dd5937d8fa2d9b0063f0",
+        "state": "a5943369f1c8259bc0d873810ca0ea6c87e7622ae794b888821cdcacc3b64cff"
+      }
+    },
+    {
+      "value": {
+        "😀": 2,
+        "": 1,
+        "é": "é"
+      },
+      "canonical": "{\"é\":\"é\",\"\":1,\"😀\":2}",
+      "hashes": {
+        "sign": "f4c960a332e45588272fef84e82ad3a1fc02401449b4c43c19057b104c97727a",
+        "tx": "9efba9d1f0ec9338c69a7ce4c0e8c7356137d148154ea002ad1c20a75a696d1b",
+        "genesis": "a42e7dfdf9eda6e60cc9752cd5906c523f82c3d5d7e0b36ec7d6b6dace1c34a8",
+        "block": "c4d3b1e3248899ab29cb7cdd1e7fe51955e6efa3f1c67d051008dc648134049e",
+        "transactions": "d2f3efa3d5b458d0c750c7ea1b408cdd4e284e36646af6845e7033352c9cb3b7",
+        "results": "593371a9753c6074376fcede9bfbcc9c48b36f5c45b261a5dd2868aa4d8a6f44",
+        "state": "bdc1c36dabe5583769c33beb2815f260db61d94b64848c4d06331ad3eeee2fda"
+      }
+    },
+    {
+      "value": {
+        "integer": 9007199254740991
+      },
+      "canonical": "{\"integer\":9007199254740991}",
+      "hashes": {
+        "sign": "20204949ef104af8bb17fc9f097f0e3d1b7b723938ea009c24a6ff57139e5f77",
+        "tx": "73949a74c39f8a300ba5b5c51d4fd7aad6f0aca1875901f311128b4ba65478fb",
+        "genesis": "b5fe3007c3b806736a8efb4eb8ac0c0aad08853d2852fa37243dc1af252bc159",
+        "block": "810a25290f50e9a22524165cc5244e2c776679ccb4066b1ebacedb801685a55a",
+        "transactions": "b4932160e691d28c0c553efe07825f9fb528adb7e84763f18cfeadd7fb3c9a1e",
+        "results": "e8ccdd8c9f68f53dc27ea26ae6e89231cf4825143ce6b2535296fc5e9968443b",
+        "state": "f8faceeb14ca8ee0e2ce1bd530a015620b21d05a99a475ec93f81bea7775adce"
+      }
+    }
+  ],
+  "transaction": {
+    "value": {
+      "protocol_version": 1,
+      "chain_id": "aomori-test",
+      "genesis_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "from": "alice",
+      "nonce": 0,
+      "entity_id": 4,
+      "action": "talk",
+      "args": {
+        "npc_id": 6
+      },
+      "signature": "f50a42b744ba398fbbeb6a19565c754e85e74a88f0eacfa461cb28cd980ad4aa654659bcb5732069a0f810363ea204e9549e972086fe2db0957cf32e6371dd05"
+    },
+    "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+    "signing_digest": "8ffa80cda9a089aecdfc51775ad1b58c219d7afbaf678c7e9c7866ee6b664b28",
+    "tx_id": "2ed36f12cda4b3a288d960186e58f27ea045999c834b3c07b83c3d199c03bf38"
+  }
+}

@@ -38,7 +38,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 ## Verification at this handoff
 
 - Final full Web E2E: 48 tests passed locally, including sequential socket establishment. A separate 100-socket/60-second run also passed.
-- Current Rust suite includes monitoring/TLS deployment contracts (95 tests total).
+- Current Rust suite includes monitoring/TLS deployment contracts (100 tests total).
 - Rust fmt/check/clippy, Web build, shell syntax, RPC smoke, YAML/JSON parsing and monitoring Compose parse passed.
 - Counts are the handoff baseline; use actual test output if more tests are added.
 - Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI passed for commit b916192, including Web E2E and the accumulated deployment/fault checks after fixing account reuse/stale receipt assertions. Independent tests no longer share serial retry grouping; native stdout is preserved in failure artifacts. Subsequent commits require their own matching remote results.

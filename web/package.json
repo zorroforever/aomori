@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "test:e2e": "playwright test",
+    "test:ledger": "node --experimental-strip-types ledger.test.ts",
     "preview": "vite preview --host 127.0.0.1"
   },
   "devDependencies": {
