@@ -268,6 +268,28 @@ fn tls_smoke_verifies_certificates_and_metrics_isolation() {
     assert!(CI.contains("web/e2e-output.log"));
 }
 
+#[test]
+fn disk_full_smoke_is_isolated_and_checks_transaction_rollback() {
+    let smoke = include_str!("../scripts/disk-full-smoke.sh");
+    for required in [
+        "--network none",
+        "--tmpfs /data:rw,size=8m",
+        "--cap-drop ALL",
+        "No space left on device",
+        "sha256sum /data/state.json",
+        "before_account",
+        "before_events",
+        "aomori_get_receipt",
+        "docker rm -f",
+    ] {
+        assert!(
+            smoke.contains(required),
+            "missing disk drill boundary: {required}"
+        );
+    }
+    assert!(CI.contains("./scripts/disk-full-smoke.sh"));
+}
+
 fn service_directives(contents: &str) -> BTreeMap<&str, &str> {
     contents
         .lines()

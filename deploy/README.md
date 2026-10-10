@@ -47,6 +47,12 @@ cargo build --locked
 
 This uses disposable directories only. It verifies normal restart, SIGKILL immediately after an acknowledged transaction, and a full offline archive restore. The restore retains a separate copy of post-backup data and verifies the restored state excludes an account created after backup. It never restores over a running node. Follow [operations](../doc/operations.md) for real backups, permissions, and rollback; archives contain private world/account data and require restricted access. The script also obstructs the snapshot temporary-file path to verify rollback on a real filesystem write error and successful retry after the obstruction is removed. This is not ENOSPC, a power-loss or a torn-write simulation.
 
+## Isolated disk-full drill
+
+Run `./scripts/disk-full-smoke.sh` with Docker access (or `sudo -n bash scripts/disk-full-smoke.sh`). It builds the node image and fills an isolated 8 MiB container tmpfs until `dd` reports ENOSPC. It then verifies transaction failure preserves the snapshot hash, world info, account nonce and event history; freeing space permits the same transaction to succeed, with its receipt retained across a process restart. The temporary container has no network, runs as non-root and is removed on exit. No host filesystem is filled. Unsigned transactions are enabled only in this disposable test container.
+
+The node process is restarted inside the same running container because restarting the container would discard tmpfs. This tests application behavior on real ENOSPC, not physical disk failure or power-loss durability. The script is included in the Docker CI job. Set `AOMORI_DISK_SMOKE_IMAGE` to override the test image tag.
+
 ## Browser restart and concurrency/soak
 
 ```bash

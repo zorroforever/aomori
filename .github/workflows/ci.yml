@@ -107,3 +107,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: AOMORI_SMOKE_PORT=28091 ./scripts/docker-smoke.sh
+      - run: ./scripts/disk-full-smoke.sh

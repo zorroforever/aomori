@@ -24,6 +24,12 @@ The node Docker smoke checked runtime UID, read-only root filesystem, dropped ca
 
 The first run caught a real routing-order defect: a standalone `respond @metrics` was bypassed by the SPA fallback and returned HTML with status 200. The metrics rejection now has its own `handle @metrics` branch; the runtime test passes and is part of CI. Public certificate issuance remains unverified.
 
+## Real ENOSPC rollback and recovery
+
+`sudo -n bash scripts/disk-full-smoke.sh` passed. The node ran non-root with no container network and an isolated 8 MiB tmpfs. Filling this filesystem produced an actual `No space left on device` error; a transaction then failed without changing snapshot hash, world info/root, admin nonce or event history. Removing the filler allowed the same transaction to commit. Restarting only the node process preserved world info, events, nonce and the full receipt. The container was removed on exit.
+
+This fills no host disk and proves neither torn-write nor physical power-loss behavior. Container restart is intentionally not used because it discards tmpfs.
+
 ## Three-minute read/connection resource baseline
 
 ```bash
