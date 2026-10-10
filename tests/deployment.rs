@@ -290,6 +290,27 @@ fn disk_full_smoke_is_isolated_and_checks_transaction_rollback() {
     assert!(CI.contains("./scripts/disk-full-smoke.sh"));
 }
 
+#[test]
+fn runtime_soak_checks_concurrent_reads_and_restart_evidence() {
+    let soak = include_str!("../scripts/runtime-soak.py");
+    for required in [
+        "TemporaryDirectory",
+        "ThreadPoolExecutor",
+        "aomori_submit_transaction",
+        "aomori_get_receipt",
+        "aomori_get_events",
+        "VmRSS:",
+        "restart_verified=True",
+        "args.report.open('x')",
+        "'status': 'failed'",
+        "Event replay count mismatch",
+    ] {
+        assert!(soak.contains(required), "missing soak check: {required}");
+    }
+    assert!(CI.contains("scripts/runtime-soak.py --seconds 10"));
+    assert!(CI.contains("name: runtime-soak"));
+}
+
 fn service_directives(contents: &str) -> BTreeMap<&str, &str> {
     contents
         .lines()

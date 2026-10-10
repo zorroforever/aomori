@@ -87,6 +87,13 @@ jobs:
         with:
           node-version: 22
       - run: ./scripts/rpc-smoke.sh
+      - run: python3 scripts/runtime-soak.py --seconds 10 --report runtime-soak.json
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-soak
+          path: runtime-soak.json
+          if-no-files-found: ignore
       - run: python3 scripts/test_alert_webhook.py
       - run: ./scripts/monitoring-smoke.sh
       - run: ./scripts/tls-smoke.sh

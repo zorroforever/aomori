@@ -67,6 +67,17 @@ The regular gate runs a five-second baseline with 32 simultaneous sockets and ba
 
 The browser restart case owns an isolated real node/data directory and verifies SIGKILL/reconnect, preserved cursor/state, and a second signed transaction. Ports are dynamically allocated, with a small bind race possible between reservation and node startup.
 
+## Isolated sustained read/write and resource report
+
+```bash
+cargo build --locked
+python3 scripts/runtime-soak.py --seconds 3600 --readers 8 --interval 0.5 --report /tmp/aomori-soak-hour.json
+```
+
+Linux `/proc` is required. The script owns a temporary node/data directory and free loopback port, submits transactions serially while querying concurrently, checks read snapshots against the before/after committed state, replays every event page, and restarts to verify acknowledged state, nonce and receipt. Unsigned writes are enabled only on this temporary node. It does not connect to your deployed node. Supported settings: 1–86,400 seconds, 1–32 readers, 0.1–60 seconds between batches. The report path must not exist; failures retain `status: failed` and return nonzero. Reports contain RSS, cumulative process CPU seconds, snapshot sizes, counts and maximum observed batch duration (not an RPC latency percentile). CI uploads its 10-second baseline report even when a later step fails.
+
+Observe write-driven RSS/snapshot growth rather than expecting constant memory: this runtime retains event and receipt history. A local three-minute run is documented in [local evidence](../doc/acceptance-local.md); an hour/day run has not yet been completed. Data is cleaned on exit and only the requested report remains.
+
 ## Release checks
 
 Run Rust fmt/test/check/clippy, Web build/E2E, RPC smoke, Docker smoke and deployment-config validation. Require the matching remote commit's checks to complete before claiming CI acceptance. Local test success is not remote CI evidence. See [the development checklist](../doc/development-status.md) for remaining environment-dependent acceptance.

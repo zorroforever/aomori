@@ -13,7 +13,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 | Bounded visible logs and unsafe event cursor rejection | Logs retain 500 rows; visible events/buffer 200 entries |
 | Browser connected to a real restarting node | Isolated node SIGKILL, automatic WebSocket reconnect, second signed transaction, cursor/root checks |
 | Concurrent read/connection baseline | Five-second regular gate, 32 simultaneous sockets, 16-request batches |
-| Opt-in sustained concurrency | Local 180-second run with 100 simultaneous sockets passed; RSS/CPU/snapshot samples in [local acceptance record](acceptance-local.md); not an hour/day guarantee |
+| Opt-in sustained concurrency | Local 180-second run with 100 simultaneous sockets passed; isolated 180-second read/write soak also passed (260 writes, 2,080 concurrent reads, 780 replayed events and restart verification); samples in [local acceptance record](acceptance-local.md); not an hour/day guarantee |
 | Normal restart and acknowledged-write SIGKILL recovery | RPC smoke verifies root, account nonce, events, receipts and default auth policy |
 | Offline full-directory backup restore | RPC smoke verifies matching state and exclusion of post-backup writes |
 | Filesystem write failure and retry | RPC smoke blocks the snapshot temporary path; Docker disk-full smoke tests real ENOSPC in isolated 8 MiB tmpfs, state/snapshot/nonce/event rollback, retry and receipt recovery |
@@ -37,7 +37,7 @@ This checklist replaces informal percentage estimates. It covers the agreed sing
 ## Verification at this handoff
 
 - Final full Web E2E: 48 tests passed locally, including sequential socket establishment. A separate 100-socket/60-second run also passed.
-- Current Rust suite includes monitoring/TLS deployment contracts (88 tests total).
+- Current Rust suite includes monitoring/TLS deployment contracts (89 tests total).
 - Rust fmt/check/clippy, Web build, shell syntax, RPC smoke, YAML/JSON parsing and monitoring Compose parse passed.
 - Counts are the handoff baseline; use actual test output if more tests are added.
 - Docker runtime/config validation and monitoring smoke passed during this closure. Remote CI passed for commit 9069efc (run 37914860649), including Web E2E after fixing account reuse/stale receipt assertions. Independent tests no longer share serial retry grouping; native stdout is preserved in failure artifacts. Subsequent commits require their own matching remote results.
