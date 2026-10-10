@@ -63,6 +63,19 @@ class SoakTests(unittest.TestCase):
             self.assertEqual(report['concurrent_reads'], report['writes'] * 2)
             self.assertGreater(report['resource_summary']['peak_rss_kib'], 0)
 
+    def test_sigkill_restart_preserves_full_history_and_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'report.json'
+            result = self.run_soak(path, '--restart-mode', 'sigkill')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(path.read_text())
+            self.assertEqual(report['status'], 'passed')
+            self.assertEqual(report['settings']['restart_mode'], 'sigkill')
+            self.assertEqual(report['restart_exit_code'], -9)
+            self.assertTrue(report['restart_verified'])
+            self.assertEqual(report['events_replayed'], 3 * report['writes'])
+            self.assertGreater(report['receipts_checked'], 0)
+
     def test_rss_budget_failure_preserves_sample_and_failed_status(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'report.json'

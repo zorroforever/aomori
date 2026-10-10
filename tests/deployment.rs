@@ -307,6 +307,10 @@ fn runtime_soak_checks_concurrent_reads_and_restart_evidence() {
         "RSS budget exceeded",
         "Snapshot budget exceeded",
         "resource_summary",
+        "--restart-mode",
+        "Expected SIGKILL exit -9",
+        "Restart changed event history",
+        "Restart changed checkpoint receipt",
     ] {
         assert!(soak.contains(required), "missing soak check: {required}");
     }

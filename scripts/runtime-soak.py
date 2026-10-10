@@ -38,6 +38,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seconds', type=int, default=10)
     parser.add_argument('--readers', type=int, default=8)
+    parser.add_argument('--restart-mode', choices=['sigterm', 'sigkill'], default='sigterm', help='How to stop after acknowledged writes, before recovery verification')
     parser.add_argument('--interval', type=float, default=0.5, help='Seconds between write batches')
     parser.add_argument('--max-rss-mib', type=int, help='Fail when sampled node RSS exceeds this positive budget')
     parser.add_argument('--max-snapshot-mib', type=int, help='Fail when sampled primary snapshot exceeds this positive budget')
@@ -54,7 +55,7 @@ def main():
     # Reserve the report before starting; a failed run cannot masquerade as a pass.
     with args.report.open('x') as output:
         json.dump({'status': 'running'}, output)
-    report = {'status': 'failed', 'settings': {'seconds': args.seconds, 'readers': args.readers, 'interval': args.interval, 'max_rss_mib': args.max_rss_mib, 'max_snapshot_mib': args.max_snapshot_mib}, 'samples': []}
+    report = {'status': 'failed', 'settings': {'seconds': args.seconds, 'readers': args.readers, 'restart_mode': args.restart_mode, 'interval': args.interval, 'max_rss_mib': args.max_rss_mib, 'max_snapshot_mib': args.max_snapshot_mib}, 'samples': []}
     process = None
     try:
         with tempfile.TemporaryDirectory(prefix='aomori-soak-') as directory:
@@ -165,7 +166,19 @@ def main():
                 report.update(event_history_sha256=history_digest, receipts_checked=len(checkpoints))
                 if count != final['events']:
                     raise RuntimeError('Event replay count mismatch')
-                stop()
+                if args.restart_mode == 'sigkill':
+                    if process.poll() is not None:
+                        raise RuntimeError('Node exited before planned SIGKILL')
+                    process.kill()
+                    exit_code = process.wait(timeout=10)
+                    if exit_code != -9:
+                        raise RuntimeError(f'Expected SIGKILL exit -9, got {exit_code}')
+                else:
+                    stop()
+                    exit_code = process.returncode
+                    if exit_code != 0:
+                        raise RuntimeError(f'Graceful restart exit was {exit_code}')
+                report['restart_exit_code'] = exit_code
                 start()
                 if replay_events(rpc) != (cursor, count, history_digest):
                     raise RuntimeError('Restart changed event history')
