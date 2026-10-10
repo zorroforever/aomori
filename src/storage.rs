@@ -62,6 +62,22 @@ impl SnapshotStore {
     }
 
     pub fn load_with_status(&self) -> Result<LoadedSnapshot> {
+        if !self.path.exists() && self.backup_path().exists() {
+            let backup = self.backup_path();
+            let decoded = decode(&backup).with_context(|| {
+                format!(
+                    "primary snapshot missing; invalid backup {}",
+                    backup.display()
+                )
+            })?;
+            restore_file(&self.path, &backup)?;
+            return Ok(LoadedSnapshot {
+                world: decoded.world,
+                source_format_version: decoded.source_format_version,
+                format_migrations: decoded.format_migrations,
+                needs_rewrite: decoded.needs_rewrite,
+            });
+        }
         if !self.path.exists() {
             return Ok(LoadedSnapshot {
                 world: WorldState::genesis(),
@@ -563,6 +579,73 @@ mod tests {
         assert_eq!(loaded.source_format_version, None);
         assert!(loaded.format_migrations.is_empty());
         assert_eq!(loaded.world.root(), WorldState::genesis().root());
+        assert!(!store.path().exists());
+    }
+
+    #[test]
+    fn incomplete_temporary_files_do_not_override_committed_primary() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        state.head = 7;
+        store.save(&state).unwrap();
+        for extension in [
+            "json.tmp",
+            "json.bak.tmp",
+            "json.restore.tmp",
+            "json.rollback.tmp",
+        ] {
+            fs::write(store.path().with_extension(extension), b"{\"state\":").unwrap();
+        }
+        assert_eq!(store.load().unwrap().root(), state.root());
+        state.head = 8;
+        store.save(&state).unwrap();
+        assert_eq!(store.load().unwrap().root(), state.root());
+    }
+
+    #[test]
+    fn completed_uncommitted_temporary_snapshot_is_not_promoted() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        state.head = 7;
+        store.save(&state).unwrap();
+        let committed = fs::read(store.path()).unwrap();
+        state.head = 8;
+        store.save(&state).unwrap();
+        fs::copy(store.path(), store.path().with_extension("json.tmp")).unwrap();
+        fs::write(store.path(), committed).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.head, 7);
+        // Once the primary replacement is complete, the primary wins over
+        // the old backup and any partially written next temporary snapshot.
+        store.save(&state).unwrap();
+        fs::write(store.path().with_extension("json.tmp"), b"{").unwrap();
+        assert_eq!(store.load().unwrap().head, 8);
+    }
+
+    #[test]
+    fn missing_primary_recovers_valid_backup_instead_of_genesis() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        let mut state = WorldState::genesis();
+        state.head = 7;
+        store.save(&state).unwrap();
+        state.head = 8;
+        store.save(&state).unwrap();
+        fs::remove_file(store.path()).unwrap();
+        fs::write(store.path().with_extension("json.tmp"), b"{").unwrap();
+        assert_eq!(store.load().unwrap().head, 7);
+        assert_eq!(store.load().unwrap().head, 7);
+        assert!(store.path().exists());
+    }
+
+    #[test]
+    fn missing_primary_with_invalid_backup_fails_closed() {
+        let dir = tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path()).unwrap();
+        fs::write(store.backup_path(), b"{").unwrap();
+        assert!(store.load().is_err());
         assert!(!store.path().exists());
     }
 
