@@ -62,6 +62,9 @@ class SoakTests(unittest.TestCase):
             self.assertGreater(report['writes'], 0)
             self.assertEqual(report['concurrent_reads'], report['writes'] * 2)
             self.assertGreater(report['resource_summary']['peak_rss_kib'], 0)
+            self.assertGreaterEqual(report['resource_summary']['peak_directory_bytes'], report['resource_summary']['peak_snapshot_bytes'])
+            self.assertEqual(len(report['environment']['binary_sha256']), 64)
+            self.assertIn('python', report['environment'])
 
     def test_sigkill_restart_preserves_full_history_and_receipts(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -96,7 +99,7 @@ class SoakTests(unittest.TestCase):
     def test_invalid_budget_does_not_create_report(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'report.json'
-            self.assertNotEqual(self.run_soak(path, '--max-snapshot-mib', '0').returncode, 0)
+            self.assertNotEqual(self.run_soak(path, '--max-directory-mib', '0').returncode, 0)
             self.assertFalse(path.exists())
 
 

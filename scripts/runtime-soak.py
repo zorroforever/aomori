@@ -4,6 +4,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import hashlib
+import platform
 import os
 from pathlib import Path
 import socket
@@ -42,20 +43,33 @@ def main():
     parser.add_argument('--interval', type=float, default=0.5, help='Seconds between write batches')
     parser.add_argument('--max-rss-mib', type=int, help='Fail when sampled node RSS exceeds this positive budget')
     parser.add_argument('--max-snapshot-mib', type=int, help='Fail when sampled primary snapshot exceeds this positive budget')
+    parser.add_argument('--max-directory-mib', type=int, help='Fail when sampled temporary directory files exceed this positive budget')
     parser.add_argument('--report', type=Path, required=True, help='New JSON report path; never overwrite')
     parser.add_argument('--binary', type=Path, default=Path(__file__).resolve().parents[1] / 'target/debug/aomori')
     args = parser.parse_args()
     if not 1 <= args.seconds <= 86400 or not 1 <= args.readers <= 32 or not 0.1 <= args.interval <= 60:
         parser.error('seconds: 1..86400, readers: 1..32, interval: 0.1..60')
-    if any(value is not None and value <= 0 for value in (args.max_rss_mib, args.max_snapshot_mib)):
+    if any(value is not None and value <= 0 for value in (args.max_rss_mib, args.max_snapshot_mib, args.max_directory_mib)):
         parser.error('resource budgets must be positive integers')
     binary = args.binary.resolve()
     if not binary.is_file():
         parser.error('Build the node first')
-    # Reserve the report before starting; a failed run cannot masquerade as a pass.
+    binary_hash = hashlib.sha256()
+    with binary.open('rb') as binary_file:
+        for chunk in iter(lambda: binary_file.read(1024 * 1024), b''):
+            binary_hash.update(chunk)
+    binary_digest = binary_hash.hexdigest()
+    # Reserve only after environment preflight; never overwrite evidence.
     with args.report.open('x') as output:
         json.dump({'status': 'running'}, output)
-    report = {'status': 'failed', 'settings': {'seconds': args.seconds, 'readers': args.readers, 'restart_mode': args.restart_mode, 'interval': args.interval, 'max_rss_mib': args.max_rss_mib, 'max_snapshot_mib': args.max_snapshot_mib}, 'samples': []}
+    report = {'status': 'failed', 'settings': {'seconds': args.seconds, 'readers': args.readers, 'restart_mode': args.restart_mode, 'interval': args.interval, 'max_rss_mib': args.max_rss_mib, 'max_snapshot_mib': args.max_snapshot_mib, 'max_directory_mib': args.max_directory_mib}, 'samples': []}
+    report['environment'] = {
+        'platform': platform.platform(),
+        'python': platform.python_version(),
+        'cpu_count': os.cpu_count(),
+        'binary': str(binary),
+        'binary_sha256': binary_digest,
+    }
     process = None
     try:
         with tempfile.TemporaryDirectory(prefix='aomori-soak-') as directory:
@@ -110,11 +124,22 @@ def main():
                 fields = Path(f'/proc/{process.pid}/stat').read_text().rsplit(')', 1)[1].split()
                 cpu = (int(fields[11]) + int(fields[12])) / os.sysconf('SC_CLK_TCK')
                 snapshot_bytes = (data / 'state.json').stat().st_size
-                report['samples'].append({'elapsed_seconds': round(elapsed, 3), 'rss_kib': rss, 'cpu_seconds': cpu, 'snapshot_bytes': snapshot_bytes})
+                # Apparent sizes include primary, backup, temporary files and
+                # node logs; not filesystem blocks, metadata or volume capacity.
+                directory_bytes = 0
+                for path in Path(directory).rglob('*'):
+                    try:
+                        if path.is_file():
+                            directory_bytes += path.stat().st_size
+                    except FileNotFoundError:
+                        pass  # Snapshot temporary file renamed during sampling.
+                report['samples'].append({'elapsed_seconds': round(elapsed, 3), 'rss_kib': rss, 'cpu_seconds': cpu, 'snapshot_bytes': snapshot_bytes, 'directory_bytes': directory_bytes})
                 if args.max_rss_mib is not None and rss > args.max_rss_mib * 1024:
                     raise RuntimeError(f'RSS budget exceeded: {rss} KiB > {args.max_rss_mib} MiB')
                 if args.max_snapshot_mib is not None and snapshot_bytes > args.max_snapshot_mib * 1024 * 1024:
                     raise RuntimeError(f'Snapshot budget exceeded: {snapshot_bytes} bytes > {args.max_snapshot_mib} MiB')
+                if args.max_directory_mib is not None and directory_bytes > args.max_directory_mib * 1024 * 1024:
+                    raise RuntimeError(f'Directory budget exceeded: {directory_bytes} bytes > {args.max_directory_mib} MiB')
 
             try:
                 start()
@@ -201,6 +226,8 @@ def main():
                 'sample_count': len(samples),
                 'peak_rss_kib': max(item['rss_kib'] for item in samples),
                 'peak_snapshot_bytes': max(item['snapshot_bytes'] for item in samples),
+                'peak_directory_bytes': max(item['directory_bytes'] for item in samples),
+                'directory_growth_bytes': samples[-1]['directory_bytes'] - samples[0]['directory_bytes'],
                 'rss_growth_kib': samples[-1]['rss_kib'] - samples[0]['rss_kib'],
                 'snapshot_growth_bytes': samples[-1]['snapshot_bytes'] - samples[0]['snapshot_bytes'],
             }
